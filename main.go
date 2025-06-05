@@ -183,10 +183,14 @@ func seccompIter() {
 	blocked := []string{}
 
 	//fmt.Println("Checking available syscalls...")
-
+	//RMM - Changed unix.SYS_RSEQ which was the highest syscall number to unix.FUTEX_REQUEUE which is the new highest one (June 2025)
+	// RMM - based on https://filippo.io/linux-syscall-table/
 	for id := 0; id <= unix.SYS_RSEQ; id++ {
+		// RMM - Debugging what syscall we are checking.
+		fmt.Printf("Checking syscall %d: %s \n", id, syscallName(id))
 		// these cause a hang, so just skip
 		// rt_sigreturn, select, pause, pselect6, ppoll
+
 		if id == unix.SYS_RT_SIGRETURN || id == unix.SYS_SELECT || id == unix.SYS_PAUSE || id == unix.SYS_PSELECT6 || id == unix.SYS_PPOLL {
 			continue
 		}
@@ -203,6 +207,11 @@ func seccompIter() {
 
 		// Skip seccomp itself.
 		if id == unix.SYS_SECCOMP {
+			continue
+		}
+
+		// RMM - Adding syscalls that seem to barf
+		if id == unix.SYS_SYNC {
 			continue
 		}
 
