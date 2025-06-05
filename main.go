@@ -211,7 +211,7 @@ func seccompIter() {
 		}
 
 		// RMM - Adding syscalls that seem to barf
-		if id == unix.SYS_SYNC {
+		if id == unix.SYS_SYNC || id == unix.SYS_TKILL{
 			continue
 		}
 
