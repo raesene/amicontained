@@ -50,3 +50,6 @@ coverage.txt
 profile.out
 
 !go.mod
+
+# strace logs
+trace.log

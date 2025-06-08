@@ -93,15 +93,18 @@ func main() {
 			}
 		}
 
+		// Docker.sock
+		fmt.Println("Looking for Docker.sock")
+		getValidSockets("/")
+
 		// Seccomp
 		seccompMode := proc.GetSeccompEnforcingMode(0)
 		fmt.Printf("Seccomp: %s\n", seccompMode)
 
 		seccompIter()
 
-		// Docker.sock
-		fmt.Println("Looking for Docker.sock")
-		getValidSockets("/")
+		
+		
 
 		return nil
 	}
@@ -195,7 +198,9 @@ func seccompIter() {
 			continue
 		}
 		// RMM - Debugging what syscall we are checking.
-		fmt.Printf("Checking syscall %d: %s \n", id, syscallName(id))
+		if debug {
+			fmt.Printf("Checking syscall %d: %s \n", id, syscallName(id))
+		}
 		// these cause a hang, so just skip
 		// rt_sigreturn, select, pause, pselect6, ppoll
 
