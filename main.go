@@ -111,6 +111,9 @@ func main() {
 }
 
 func walkpath(path string, info os.FileInfo, err error) error {
+	if debug {
+		fmt.Println("Checking path: " + path)
+	}
 	if err != nil {
 		if debug {
 			fmt.Println(err)
@@ -206,7 +209,7 @@ func seccompIter() {
 
 		// things currently break horribly if  CLONE, FORK or VFORK are called and the call succeeds
 		// guess it should be straight forward to kill the forks
-		if id == unix.SYS_CLONE || id == unix.SYS_FORK || id == unix.SYS_VFORK {
+		if id == unix.SYS_CLONE || id == unix.SYS_CLONE3 || id == unix.SYS_FORK || id == unix.SYS_VFORK {
 			continue
 		}
 
@@ -926,6 +929,72 @@ func syscallName(e int) string {
 		return "IO_PGETEVENTS"
 	case unix.SYS_RSEQ:
 		return "RSEQ"
+	case unix.SYS_PIDFD_SEND_SIGNAL:
+   		return "PIDFD_SEND_SIGNAL"    // 424
+	case unix.SYS_IO_URING_SETUP:
+	    return "IO_URING_SETUP"       // 425
+	case unix.SYS_IO_URING_ENTER:
+	    return "IO_URING_ENTER"       // 426
+	case unix.SYS_IO_URING_REGISTER:
+	    return "IO_URING_REGISTER"    // 427
+	case unix.SYS_OPEN_TREE:
+	    return "OPEN_TREE"            // 428
+	case unix.SYS_MOVE_MOUNT:
+	    return "MOVE_MOUNT"           // 429
+	case unix.SYS_FSOPEN:
+	    return "FSOPEN"               // 430
+	case unix.SYS_FSCONFIG:
+	    return "FSCONFIG"             // 431
+	case unix.SYS_FSMOUNT:
+	    return "FSMOUNT"              // 432
+	case unix.SYS_FSPICK:
+	    return "FSPICK"               // 433
+	case unix.SYS_PIDFD_OPEN:
+	    return "PIDFD_OPEN"           // 434
+	case unix.SYS_CLONE3:
+	    return "CLONE3"               // 435
+	case unix.SYS_CLOSE_RANGE:
+	    return "CLOSE_RANGE"          // 436
+	case unix.SYS_OPENAT2:
+	    return "OPENAT2"              // 437
+	case unix.SYS_PIDFD_GETFD:
+	    return "PIDFD_GETFD"          // 438
+	case unix.SYS_FACCESSAT2:
+	    return "FACCESSAT2"           // 439
+	case unix.SYS_PROCESS_MADVISE:
+	    return "PROCESS_MADVISE"      // 440
+	case unix.SYS_EPOLL_PWAIT2:
+	    return "EPOLL_PWAIT2"         // 441
+	case unix.SYS_MOUNT_SETATTR:
+	    return "MOUNT_SETATTR"        // 442 
+	case unix.SYS_QUOTACTL_FD:
+	    return "QUOTACTL_FD"          // 443
+	case unix.SYS_LANDLOCK_CREATE_RULESET:
+	    return "LANDLOCK_CREATE_RULESET" // 444
+	case unix.SYS_LANDLOCK_ADD_RULE:
+	    return "LANDLOCK_ADD_RULE"       // 445
+	case unix.SYS_LANDLOCK_RESTRICT_SELF:
+	    return "LANDLOCK_RESTRICT_SELF"  // 446
+	case unix.SYS_MEMFD_SECRET:
+	    return "MEMFD_SECRET"         // 447
+	case unix.SYS_PROCESS_MRELEASE:
+	    return "PROCESS_MRELEASE"     // 448
+	case unix.SYS_FUTEX_WAITV:
+	    return "FUTEX_WAITV"          // 449
+	case unix.SYS_SET_MEMPOLICY_HOME_NODE:
+	    return "SET_MEMPOLICY_HOME_NODE" // 450
+	case unix.SYS_CACHESTAT:
+	    return "CACHESSTAT"          // 451
+	case unix.SYS_FCHMODAT2:
+	    return "FCHMODAT2"            // 452
+	case unix.SYS_MAP_SHADOW_STACK:
+    	return "MAP_SHADOW_STACK"     // 453
+	case unix.SYS_FUTEX_WAKE:
+	    return "FUTEX_WAKE"           // 454
+	case unix.SYS_FUTEX_WAIT:
+	    return "FUTEX_WAIT"           // 455
+	case unix.SYS_FUTEX_REQUEUE:
+	    return "FUTEX_REQUEUE"        // 456
 	}
 	return fmt.Sprintf("%d - ERR_UNKNOWN_SYSCALL", e)
 }
