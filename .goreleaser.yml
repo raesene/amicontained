@@ -1,0 +1,26 @@
+# .goreleaser.yaml
+project_name: amicontained
+
+builds:
+  - id: amicontained
+    main: .
+    goos:
+      - linux
+    goarch:
+      - amd64
+
+archives:
+  - format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: "checksums.txt"
+
+release:
+  github:
+    owner: raesene
+    name: amicontained
+
