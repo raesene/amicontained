@@ -1,13 +1,20 @@
-# .goreleaser.yaml
 project_name: amicontained
 
 builds:
   - id: amicontained
     main: .
-    goos:
-      - linux
-    goarch:
-      - amd64
+    binary: amicontained
+    goos: [linux]
+    goarch: [amd64]
+    env:
+      - CGO_ENABLED=0          # no C dependencies => fully static with pure-Go stdlib
+    tags:
+      - netgo                  # pure-Go DNS resolver (avoid libc)
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -extldflags '-static'  # produce a static binary on Linux
 
 archives:
   - format: tar.gz

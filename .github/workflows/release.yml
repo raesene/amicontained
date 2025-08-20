@@ -1,18 +1,17 @@
-# .github/workflows/release.yml
 name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    tags: ['v*']
   release:
     types: [published]
-
 
 jobs:
   goreleaser:
     name: GoReleaser
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # required for creating GitHub Releases
 
     steps:
       - name: Checkout code
@@ -30,3 +29,5 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CGO_ENABLED: 0  # backstop; .goreleaser.yaml already enforces this
+
