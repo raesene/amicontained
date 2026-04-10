@@ -189,9 +189,10 @@ func seccompIter() {
 	blocked := []string{}
 
 	//fmt.Println("Checking available syscalls...")
-	//RMM - Changed unix.SYS_RSEQ which was the highest syscall number to unix.FUTEX_REQUEUE which is the new highest one (June 2025)
+	// RMM - Upper bound is unix.SYS_OPEN_TREE_ATTR (467), the highest x86_64 syscall
+	// exposed by golang.org/x/sys/unix as of v0.43.0 (April 2026).
 	// RMM - based on https://filippo.io/linux-syscall-table/
-	for id := 0; id <= unix.SYS_FCHMODAT2; id++ {
+	for id := 0; id <= unix.SYS_OPEN_TREE_ATTR; id++ {
 		// RMM - We need to skip 335 to 423 as they're not valid syscalls
 		// RMM - Source https://filippo.io/linux-syscall-table/
 		if id >= 335 && id <= 423 {
@@ -1000,6 +1001,28 @@ func syscallName(e int) string {
 	    return "FUTEX_WAIT"           // 455
 	case unix.SYS_FUTEX_REQUEUE:
 	    return "FUTEX_REQUEUE"        // 456
+	case unix.SYS_STATMOUNT:
+	    return "STATMOUNT"            // 457
+	case unix.SYS_LISTMOUNT:
+	    return "LISTMOUNT"            // 458
+	case unix.SYS_LSM_GET_SELF_ATTR:
+	    return "LSM_GET_SELF_ATTR"    // 459
+	case unix.SYS_LSM_SET_SELF_ATTR:
+	    return "LSM_SET_SELF_ATTR"    // 460
+	case unix.SYS_LSM_LIST_MODULES:
+	    return "LSM_LIST_MODULES"     // 461
+	case unix.SYS_MSEAL:
+	    return "MSEAL"                // 462
+	case unix.SYS_SETXATTRAT:
+	    return "SETXATTRAT"           // 463
+	case unix.SYS_GETXATTRAT:
+	    return "GETXATTRAT"           // 464
+	case unix.SYS_LISTXATTRAT:
+	    return "LISTXATTRAT"          // 465
+	case unix.SYS_REMOVEXATTRAT:
+	    return "REMOVEXATTRAT"        // 466
+	case unix.SYS_OPEN_TREE_ATTR:
+	    return "OPEN_TREE_ATTR"       // 467
 	}
 	return fmt.Sprintf("%d - ERR_UNKNOWN_SYSCALL", e)
 }

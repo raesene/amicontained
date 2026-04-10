@@ -5,7 +5,7 @@ require (
 	github.com/jessfraz/bpfd v0.0.0-20180918065159-854869239e70
 	github.com/sirupsen/logrus v1.9.3
 	github.com/tv42/httpunix v0.0.0-20191220191345-2ba4b9c3382c
-	golang.org/x/sys v0.33.0
+	golang.org/x/sys v0.43.0
 )
 
 require (
