@@ -8,8 +8,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-
-	"golang.org/x/sys/unix"
 )
 
 // Status returns /proc/self/status as key/value pairs.
@@ -76,28 +74,6 @@ func ParseUIDMap(s string) (bool, []UserMapping) {
 		mappings = append(mappings, UserMapping{ContainerID: v[0], HostID: v[1], Range: v[2]})
 	}
 	return true, mappings
-}
-
-// AppArmorProfile returns the label in /proc/self/attr/current, or
-// "unconfined" if there is none.
-func AppArmorProfile() string {
-	b, _ := os.ReadFile("/proc/self/attr/current")
-	if p := strings.TrimSpace(strings.TrimRight(string(b), "\x00")); p != "" {
-		return p
-	}
-	return "unconfined"
-}
-
-// HasNamespace guesses whether PID 1 is in a non-initial namespace of type
-// ns ("pid", "user", ...) from the device number of its /proc/1/ns link.
-// TODO: this is a heuristic carried over from bpfd; replace it.
-func HasNamespace(ns string) (bool, error) {
-	file := "/proc/1/ns/" + ns
-	var st unix.Stat_t
-	if err := unix.Lstat(file, &st); err != nil {
-		return false, &os.PathError{Op: "lstat", Path: file, Err: err}
-	}
-	return st.Dev > 4, nil
 }
 
 // CapSet is one capability set from /proc/self/status.

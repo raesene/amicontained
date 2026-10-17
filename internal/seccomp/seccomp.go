@@ -108,6 +108,33 @@ func (r *Report) Blocked() []Result {
 	return blocked
 }
 
+// SafeToCall reports whether other checks may make syscall name for real
+// without risking a KILL or TRAP action, and if not, why. It assumes the
+// policy does not filter on the arguments the caller will use.
+func (r *Report) SafeToCall(name string) (bool, string) {
+	switch r.Mode {
+	case ModeDisabled, ModeUnsupported:
+		return true, ""
+	case ModeStrict:
+		return false, "seccomp strict mode"
+	}
+	for _, s := range r.Syscalls {
+		if s.Syscall != name {
+			continue
+		}
+		switch s.Action {
+		case ActionAllow:
+			return true, ""
+		case ActionErrno:
+			return false, "blocked by seccomp (" + s.Errno + ")"
+		case ActionKill, ActionTrap:
+			return false, "blocked by seccomp (" + string(s.Action) + ")"
+		}
+		return false, "seccomp verdict " + string(s.Action)
+	}
+	return false, "not probed by seccomp check"
+}
+
 // Options controls Probe.
 type Options struct {
 	// Method selects the probing method; MethodAuto tries user

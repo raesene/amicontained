@@ -11,10 +11,13 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/genuinetools/amicontained/internal/container"
+	"github.com/genuinetools/amicontained/internal/hardening"
+	"github.com/genuinetools/amicontained/internal/lsm"
 	"github.com/genuinetools/amicontained/internal/procfs"
 	"github.com/genuinetools/amicontained/internal/seccomp"
 	"github.com/genuinetools/amicontained/version"
@@ -28,20 +31,17 @@ var (
 
 // report is everything amicontained found, in output order.
 type report struct {
-	Runtime      *container.Runtime   `json:"runtime"`
-	Namespaces   namespaces           `json:"namespaces"`
-	AppArmor     string               `json:"apparmor_profile"`
-	Capabilities *procfs.Capabilities `json:"capabilities"`
-	CapsError    string               `json:"capabilities_error,omitempty"`
-	DockerSocks  []string             `json:"docker_sockets"`
-	Seccomp      *seccomp.Report      `json:"seccomp"`
-}
-
-type namespaces struct {
-	PID          *bool                `json:"pid,omitempty"`
-	PIDError     string               `json:"pid_error,omitempty"`
-	User         bool                 `json:"user"`
-	UserMappings []procfs.UserMapping `json:"user_mappings,omitempty"`
+	Runtime        *container.Runtime   `json:"runtime"`
+	Namespaces     []procfs.Namespace   `json:"namespaces"`
+	HostPIDVisible bool                 `json:"host_pid_visible"`
+	UserMappings   []procfs.UserMapping `json:"user_mappings,omitempty"`
+	NoNewPrivs     *bool                `json:"no_new_privs"`
+	LSM            *lsm.Report          `json:"lsm"`
+	Capabilities   *procfs.Capabilities `json:"capabilities"`
+	CapsError      string               `json:"capabilities_error,omitempty"`
+	Hardening      *hardening.Report    `json:"hardening"`
+	DockerSocks    []string             `json:"docker_sockets"`
+	Seccomp        *seccomp.Report      `json:"seccomp"`
 }
 
 func main() {
@@ -118,23 +118,27 @@ func parseSeccompMethod(s string) (seccomp.Method, error) {
 func gather(method seccomp.Method) *report {
 	r := &report{}
 
-	// Container Runtime
+	// Seccomp goes first: later checks make real syscalls and ask it which
+	// ones are safe.
+	opts := seccomp.Options{Method: method}
+	if debug {
+		opts.Debug = os.Stderr
+	}
+	r.Seccomp = seccomp.Probe(opts)
+
 	r.Runtime = container.Detect()
 
-	// Namespaces
-	if ns, err := procfs.HasNamespace("pid"); err != nil {
-		r.Namespaces.PIDError = err.Error()
-	} else {
-		r.Namespaces.PID = &ns
-	}
-	r.Namespaces.User, r.Namespaces.UserMappings = procfs.UserNamespace()
+	r.Namespaces = procfs.Namespaces()
+	r.HostPIDVisible = procfs.HostPIDVisible()
+	userNS, mappings := procfs.UserNamespace()
+	r.UserMappings = mappings
 
-	// AppArmor Profile
-	r.AppArmor = procfs.AppArmorProfile()
-
-	// Capabilities
 	status, err := procfs.Status()
 	if err == nil {
+		if v, ok := status["NoNewPrivs"]; ok {
+			nnp := v == "1"
+			r.NoNewPrivs = &nnp
+		}
 		r.Capabilities, err = procfs.ParseCapabilities(status)
 	}
 	if err != nil {
@@ -142,15 +146,20 @@ func gather(method seccomp.Method) *report {
 		fmt.Fprintf(os.Stderr, "amicontained: getting capabilities failed: %v\n", err)
 	}
 
-	// Docker.sock
-	r.DockerSocks = getValidSockets("/")
+	r.LSM = lsm.Detect(r.Seccomp.SafeToCall)
 
-	// Seccomp
-	opts := seccomp.Options{Method: method}
-	if debug {
-		opts.Debug = os.Stderr
+	in := hardening.Inputs{
+		SeccompDisabled: r.Seccomp.Mode == seccomp.ModeDisabled,
+		LSMConfined:     r.LSM.Confined(),
+		UserNamespace:   userNS,
+		Sandbox:         r.Runtime.Sandbox,
 	}
-	r.Seccomp = seccomp.Probe(opts)
+	if r.Capabilities != nil {
+		in.Bounding = r.Capabilities.Bounding.Names
+	}
+	r.Hardening = hardening.Assess(in)
+
+	r.DockerSocks = getValidSockets("/")
 
 	return r
 }
@@ -158,21 +167,36 @@ func gather(method seccomp.Method) *report {
 func printReport(w io.Writer, r *report) {
 	printRuntime(w, r.Runtime)
 
-	fmt.Fprintln(w, "Has Namespaces:")
-	if r.Namespaces.PID != nil {
-		fmt.Fprintf(w, "\tpid: %t\n", *r.Namespaces.PID)
-	} else {
-		fmt.Fprintf(w, "\tpid: error -> %s\n", r.Namespaces.PIDError)
+	fmt.Fprintln(w, "Namespaces:")
+	for _, ns := range r.Namespaces {
+		switch {
+		case ns.Error != "":
+			fmt.Fprintf(w, "\t%s: error -> %s\n", ns.Type, ns.Error)
+		case ns.Host && ns.Exact:
+			fmt.Fprintf(w, "\t%s: host\n", ns.Type)
+		case ns.Host:
+			fmt.Fprintf(w, "\t%s: host (likely)\n", ns.Type)
+		case ns.Exact:
+			fmt.Fprintf(w, "\t%s: private\n", ns.Type)
+		default:
+			fmt.Fprintf(w, "\t%s: private (likely)\n", ns.Type)
+		}
 	}
-	fmt.Fprintf(w, "\tuser: %t\n", r.Namespaces.User)
-	if len(r.Namespaces.UserMappings) > 0 {
+	if r.HostPIDVisible {
+		fmt.Fprintln(w, "\tnote: host processes are visible (kthreadd is PID 2)")
+	}
+	if len(r.UserMappings) > 0 {
 		fmt.Fprintln(w, "User Namespace Mappings:")
-		for _, m := range r.Namespaces.UserMappings {
+		for _, m := range r.UserMappings {
 			fmt.Fprintf(w, "\tContainer -> %d\tHost -> %d\tRange -> %d\n", m.ContainerID, m.HostID, m.Range)
 		}
 	}
 
-	fmt.Fprintf(w, "AppArmor Profile: %s\n", r.AppArmor)
+	if r.NoNewPrivs != nil {
+		fmt.Fprintf(w, "No New Privileges: %t\n", *r.NoNewPrivs)
+	}
+
+	printLSM(w, r.LSM)
 
 	if c := r.Capabilities; c != nil {
 		fmt.Fprintln(w, "Capabilities:")
@@ -195,6 +219,8 @@ func printReport(w io.Writer, r *report) {
 	} else {
 		fmt.Fprintf(w, "Capabilities: error -> %s\n", r.CapsError)
 	}
+
+	printHardening(w, r.Hardening)
 
 	fmt.Fprintln(w, "Docker Sockets:")
 	if len(r.DockerSocks) == 0 {
@@ -229,6 +255,100 @@ func printRuntime(w io.Writer, rt *container.Runtime) {
 	for _, e := range rt.Evidence {
 		fmt.Fprintf(w, "\tevidence: %s\n", e)
 	}
+}
+
+func printLSM(w io.Writer, l *lsm.Report) {
+	source := l.Source
+	if source == "inferred" {
+		source += ", may be incomplete"
+	}
+	fmt.Fprintf(w, "Security Modules: %s (source: %s)\n", strings.Join(l.Active, ","), source)
+	for _, x := range []struct {
+		name  string
+		label *lsm.Label
+	}{{"AppArmor", l.AppArmor}, {"SELinux", l.SELinux}, {"Smack", l.Smack}} {
+		if x.label == nil {
+			continue
+		}
+		fmt.Fprintf(w, "\t%s: %s", x.name, x.label.Label)
+		switch {
+		case !x.label.Confining && x.label.Note != "":
+			fmt.Fprintf(w, " (not confining: %s)", x.label.Note)
+		case !x.label.Confining:
+			fmt.Fprint(w, " (not confining)")
+		}
+		fmt.Fprintln(w)
+	}
+	if l.Landlock.Available {
+		fmt.Fprintf(w, "\tLandlock: available (ABI %d)\n", l.Landlock.ABI)
+	} else {
+		fmt.Fprintf(w, "\tLandlock: unavailable (%s)\n", l.Landlock.Error)
+	}
+}
+
+func printHardening(w io.Writer, h *hardening.Report) {
+	p := h.Privileged
+	fmt.Fprintf(w, "Privileged Indicators: %d/%d (%s)\n", p.Present, len(p.Indicators), p.Verdict)
+	for _, i := range p.Indicators {
+		v := "no"
+		if i.Present {
+			v = "YES"
+		}
+		if i.Detail != "" && (i.Present || strings.Contains(i.Name, "bounding")) {
+			v += " -> " + i.Detail
+		}
+		fmt.Fprintf(w, "\t%s: %s\n", i.Name, v)
+	}
+
+	rootfs := "read-write"
+	if h.RootFSReadOnly {
+		rootfs = "read-only"
+	}
+	fmt.Fprintf(w, "Root Filesystem: %s\n", rootfs)
+
+	c := h.Cgroup
+	fmt.Fprintf(w, "Cgroup: %s", c.Version)
+	if c.Path != "" {
+		fmt.Fprintf(w, " (path %s)", c.Path)
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "\tmemory limit: %s\n", formatMemory(c.MemoryMax))
+	fmt.Fprintf(w, "\tcpu limit: %s\n", formatCPU(c.CPUMax))
+	fmt.Fprintf(w, "\tpids limit: %s\n", formatLimit(c.PIDsMax))
+}
+
+func formatLimit(v string) string {
+	switch v {
+	case "":
+		return "unknown"
+	case "max":
+		return "none"
+	}
+	return v
+}
+
+func formatMemory(v string) string {
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return formatLimit(v)
+	}
+	units := []string{"B", "KiB", "MiB", "GiB", "TiB"}
+	f, u := float64(n), 0
+	for f >= 1024 && u < len(units)-1 {
+		f /= 1024
+		u++
+	}
+	return strconv.FormatFloat(f, 'f', -1, 64) + " " + units[u]
+}
+
+func formatCPU(v string) string {
+	quota, period, ok := strings.Cut(v, " ")
+	q, err1 := strconv.ParseFloat(quota, 64)
+	p, err2 := strconv.ParseFloat(period, 64)
+	if !ok || err1 != nil || err2 != nil || p == 0 {
+		return formatLimit(quota)
+	}
+	return strconv.FormatFloat(q/p, 'f', -1, 64) + " CPUs"
 }
 
 func printSeccomp(w io.Writer, s *seccomp.Report) {
