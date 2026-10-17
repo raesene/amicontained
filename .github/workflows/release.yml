@@ -1,14 +1,18 @@
 name: Release
 
-# Tag pushes only: GoReleaser creates the GitHub Release itself, so also
-# triggering on "release: published" ran this workflow twice.
+# Push a v* tag to release. GoReleaser creates the GitHub Release itself.
 on:
   push:
     tags: ['v*']
 
 jobs:
+  # The full CI suite, including the seccomp tests on amd64 and arm64.
+  ci:
+    uses: ./.github/workflows/ci.yml
+
   goreleaser:
     name: GoReleaser
+    needs: ci
     runs-on: ubuntu-latest
     permissions:
       contents: write   # required for creating GitHub Releases
@@ -24,10 +28,16 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # VERSION.txt (the version baked into the binary) and the git tag (the
-      # release name) are deliberately different; see CLAUDE.md.
-      - name: Read VERSION.txt
-        run: echo "AMICONTAINED_VERSION=$(cat VERSION.txt)" >> "$GITHUB_ENV"
+      # The binary reports VERSION.txt; refuse to release a tag that
+      # disagrees with it.
+      - name: Check tag matches VERSION.txt
+        run: |
+          version=$(cat VERSION.txt)
+          if [ "$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match VERSION.txt ($version)"
+            exit 1
+          fi
+          echo "AMICONTAINED_VERSION=$version" >> "$GITHUB_ENV"
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
