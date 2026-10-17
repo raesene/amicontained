@@ -1,3 +1,5 @@
+version: 2
+
 project_name: amicontained
 
 builds:
@@ -7,17 +9,17 @@ builds:
     goos: [linux]
     goarch: [amd64, arm64]
     env:
-      - CGO_ENABLED=0          # no C dependencies => fully static with pure-Go stdlib
-    tags:
-      - netgo                  # pure-Go DNS resolver (avoid libc)
+      - CGO_ENABLED=0 # pure Go, so the binary is fully static
     flags:
       - -trimpath
+      - -mod=vendor
     ldflags:
       - -s -w
-      - -extldflags '-static'  # produce a static binary on Linux
+      - -X github.com/genuinetools/amicontained/version.VERSION={{ .Env.AMICONTAINED_VERSION }}
+      - -X github.com/genuinetools/amicontained/version.GITCOMMIT={{ .ShortCommit }}
 
 archives:
-  - format: tar.gz
+  - formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - LICENSE
@@ -30,4 +32,3 @@ release:
   github:
     owner: raesene
     name: amicontained
-

@@ -70,10 +70,25 @@ lint: ## Verifies `golint` passes.
 		exit 1; \
 	fi
 
+# Tests that are safe on any machine: they parse fixtures or talk to fake
+# servers in a temp dir. The seccomp probe tests install seccomp filters and
+# execute syscalls, so they only run in a container: see `make test-binaries`.
+SAFE_TEST_PKGS := ./internal/procfs ./internal/container ./internal/lsm \
+	./internal/hardening ./internal/sockets ./internal/report
+SECCOMP_UNIT_TESTS := ParseStatus|SyscallTable|JumpsInBounds|HeuristicClassifier|DisabledMode|SafeToCall
+
 .PHONY: test
-test: prebuild ## Runs the go tests.
+test: prebuild ## Runs the unit tests that are safe outside a container.
 	@echo "+ $@"
-	@$(GO) test -v -tags "$(BUILDTAGS) cgo" $(shell $(GO) list ./... | grep -v vendor)
+	@$(GO) test $(SAFE_TEST_PKGS)
+	@$(GO) test ./internal/seccomp -run '$(SECCOMP_UNIT_TESTS)'
+
+.PHONY: test-binaries
+test-binaries: static ## Builds the seccomp test binary for running in a container (see README).
+	@echo "+ $@"
+	CGO_ENABLED=0 $(GO) test -c -o seccomp.test ./internal/seccomp
+	@echo "Run inside a container, never on the host:"
+	@echo "  docker run --rm --security-opt seccomp=unconfined -v \$$PWD/seccomp.test:/t:ro alpine /t -test.v"
 
 .PHONY: vet
 vet: ## Verifies `go vet` passes.
@@ -92,7 +107,7 @@ staticcheck: ## Verifies `staticcheck` passes.
 .PHONY: cover
 cover: prebuild ## Runs go test with coverage.
 	@echo "" > coverage.txt
-	@for d in $(shell $(GO) list ./... | grep -v vendor); do \
+	@for d in $(SAFE_TEST_PKGS); do \
 		$(GO) test -race -coverprofile=profile.out -covermode=atomic "$$d"; \
 		if [ -f profile.out ]; then \
 			cat profile.out >> coverage.txt; \
@@ -158,9 +173,6 @@ image: ## Create the docker image from the Dockerfile.
 	@docker build --rm --force-rm -t $(REGISTRY)/$(NAME) .
 
 .PHONY: image-dev
-image-dev:
-	@docker build --rm --force-rm -f Dockerfile.dev -t $(REGISTRY)/$(NAME):dev .
-
 .PHONY: AUTHORS
 AUTHORS:
 	@$(file >$@,# This file lists all individuals having contributed content to the repository.)
