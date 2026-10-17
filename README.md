@@ -37,18 +37,27 @@ include false positives from other security layers.
 
 ```bash
 amicontained [-json] [-seccomp-method auto|notify|heuristic|none] [-d]
+amicontained -version
 ```
 
 Running in a Docker container with the default profile gives something like:
 
 ```
-Container Runtime: not-found
+Container Runtime: docker
+	container id: 34be342a559e641b89f4034132272e9def885d07d6ec7672835c8d3aa9a8688d
+	evidence: /.dockerenv exists
+	evidence: mountinfo: /etc/hostname from /var/lib/docker/containers/
+	...
 Has Namespaces:
 	pid: true
 	user: false
 AppArmor Profile: docker-default (enforce)
 Capabilities:
-	BOUNDING -> chown dac_override fowner fsetid kill setgid setuid setpcap net_bind_service net_raw sys_chroot mknod audit_write setfcap
+	effective -> chown dac_override fowner fsetid kill setgid setuid setpcap net_bind_service net_raw sys_chroot mknod audit_write setfcap
+	permitted -> chown dac_override fowner fsetid kill setgid setuid setpcap net_bind_service net_raw sys_chroot mknod audit_write setfcap
+	inheritable -> none
+	bounding -> chown dac_override fowner fsetid kill setgid setuid setpcap net_bind_service net_raw sys_chroot mknod audit_write setfcap
+	ambient -> none
 Docker Sockets:
 	none found
 Seccomp: filtering (filters: 1, method: user-notification)
@@ -61,6 +70,14 @@ Argument Checks:
 	clone(CLONE_NEWUSER) - create a user namespace: blocked (EPERM)
 	...
 ```
+
+The runtime is worked out from several signals (marker files such as
+`/.dockerenv` and `/run/.containerenv`, host paths leaked through
+`/proc/self/mountinfo`, cgroup paths, the systemd `container=` convention and
+Kubernetes service account/environment), and every signal that matched is
+listed as evidence. It recognises Docker, Podman, containerd, CRI-O, LXC,
+systemd-nspawn, OpenVZ and Garden, Kubernetes as an orchestrator, and gVisor
+as a sandbox.
 
 `-json` emits the same information as JSON, including the action and errno
 for every syscall. `-d` adds debug output on stderr and lists allowed syscalls.
