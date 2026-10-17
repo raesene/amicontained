@@ -1,33 +1,19 @@
-FROM golang:alpine as builder
-MAINTAINER Jessica Frazelle <jess@linux.com>
+FROM golang:1.26-alpine AS builder
 
-ENV PATH /go/bin:/usr/local/go/bin:$PATH
-ENV GOPATH /go
+WORKDIR /src
+COPY . .
 
-RUN	apk add --no-cache \
-	bash \
-	ca-certificates
+# Pure Go and vendored: no C toolchain or network access needed.
+RUN CGO_ENABLED=0 go build -mod=vendor -trimpath \
+	-ldflags "-s -w \
+	  -X github.com/genuinetools/amicontained/version.VERSION=$(cat VERSION.txt) \
+	  -X github.com/genuinetools/amicontained/version.GITCOMMIT=docker" \
+	-o /amicontained .
 
-COPY . /go/src/github.com/genuinetools/amicontained
+# The binary is static and re-executes itself via /proc/self/exe, so it
+# needs nothing from a base image.
+FROM scratch
 
-RUN set -x \
-	&& apk add --no-cache --virtual .build-deps \
-		git \
-		gcc \
-		libc-dev \
-		libgcc \
-		make \
-	&& cd /go/src/github.com/genuinetools/amicontained \
-	&& make static \
-	&& mv amicontained /usr/bin/amicontained \
-	&& apk del .build-deps \
-	&& rm -rf /go \
-	&& echo "Build complete."
+COPY --from=builder /amicontained /amicontained
 
-FROM alpine:latest
-
-COPY --from=builder /usr/bin/amicontained /usr/bin/amicontained
-COPY --from=builder /etc/ssl/certs/ /etc/ssl/certs
-
-ENTRYPOINT [ "amicontained" ]
-CMD [ "--help" ]
+ENTRYPOINT ["/amicontained"]

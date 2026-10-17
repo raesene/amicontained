@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Lint, vet, unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: gofmt
+        run: |
+          unformatted=$(git ls-files -z '*.go' ':!:vendor/' | xargs -0 gofmt -l)
+          if [ -n "$unformatted" ]; then
+            echo "Not gofmt'd:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: Vendor directory is up to date
+        run: |
+          go mod tidy
+          go mod vendor
+          git diff --exit-code -- go.mod go.sum vendor/
+
+      - name: Generated syscall tables are up to date
+        run: |
+          go generate ./internal/seccomp
+          git diff --exit-code -- internal/seccomp/
+
+      - name: go vet (amd64)
+        run: GOARCH=amd64 go vet ./...
+
+      - name: go vet (arm64)
+        run: GOARCH=arm64 go vet ./...
+
+      # Only tests that parse fixtures or talk to fake servers in a temp dir.
+      # The seccomp probe tests install filters and run below in a container.
+      - name: Unit tests
+        run: |
+          go test ./internal/procfs ./internal/container ./internal/lsm \
+            ./internal/hardening ./internal/sockets ./internal/report
+          go test ./internal/seccomp \
+            -run 'ParseStatus|SyscallTable|JumpsInBounds|HeuristicClassifier|DisabledMode|SafeToCall'
+
+      - name: Static builds
+        run: |
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOARCH=$arch go build -trimpath -o /tmp/amicontained-$arch .
+          done
+          file /tmp/amicontained-*
+
+  container:
+    name: Seccomp and smoke tests in containers
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: |
+          CGO_ENABLED=0 go build -trimpath -o /tmp/amicontained .
+          CGO_ENABLED=0 go test -c -o /tmp/seccomp.test ./internal/seccomp
+
+      # The hermetic tests install their own outer filter, so only that
+      # filter may apply: seccomp=unconfined is required.
+      - name: Hermetic seccomp tests
+        run: |
+          docker run --rm --security-opt seccomp=unconfined \
+            -v /tmp/seccomp.test:/t:ro alpine /t -test.v
+
+      - name: Smoke test under the default Docker profile
+        run: |
+          docker run --rm -v /tmp/amicontained:/a:ro alpine /a
+          docker run --rm -v /tmp/amicontained:/a:ro alpine /a -json > report.json
+          python3 - <<'EOF'
+          import json
+          r = json.load(open("report.json"))
+          assert r["runtime"]["engine"] == "docker", r["runtime"]
+          assert r["seccomp"]["mode"] == "filtering", r["seccomp"]["mode"]
+          assert r["seccomp"]["method"] == "user-notification", r["seccomp"]["method"]
+          blocked = [s["syscall"] for s in r["seccomp"]["syscalls"] if s["action"] != "allow"]
+          assert "mount" in blocked and "read" not in blocked, blocked
+          assert r["hardening"]["privileged"]["present"] == 0, r["hardening"]["privileged"]
+          assert r["findings"] == [], r["findings"]
+          print("default profile: ok,", len(blocked), "syscalls not allowed")
+          EOF
+
+      - name: Smoke test with --privileged
+        run: |
+          docker run --rm --privileged -v /tmp/amicontained:/a:ro alpine /a -json > priv.json
+          python3 -c '
+          import json
+          r = json.load(open("priv.json"))
+          assert r["seccomp"]["mode"] == "disabled"
+          assert r["hardening"]["privileged"]["present"] == 7, r["hardening"]["privileged"]
+          assert r["findings"][0]["severity"] == "high", r["findings"]
+          print("privileged: ok")'

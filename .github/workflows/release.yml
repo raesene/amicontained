@@ -1,10 +1,10 @@
 name: Release
 
+# Tag pushes only: GoReleaser creates the GitHub Release itself, so also
+# triggering on "release: published" ran this workflow twice.
 on:
   push:
     tags: ['v*']
-  release:
-    types: [published]
 
 jobs:
   goreleaser:
@@ -16,18 +16,24 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # GoReleaser needs the tag history for the changelog
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26'
+          go-version-file: go.mod
+
+      # VERSION.txt (the version baked into the binary) and the git tag (the
+      # release name) are deliberately different; see CLAUDE.md.
+      - name: Read VERSION.txt
+        run: echo "AMICONTAINED_VERSION=$(cat VERSION.txt)" >> "$GITHUB_ENV"
 
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v5
+        uses: goreleaser/goreleaser-action@v6
         with:
-          version: latest
+          distribution: goreleaser
+          version: '~> v2'
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CGO_ENABLED: 0  # backstop; .goreleaser.yaml already enforces this
-

@@ -52,4 +52,4 @@ profile.out
 !go.mod
 
 # strace logs
-trace.log
+trace.logseccomp.test
