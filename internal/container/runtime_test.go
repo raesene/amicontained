@@ -35,6 +35,23 @@ const podmanMountinfo = `100 90 0:50 / / rw - overlay overlay rw,lowerdir=/var/l
 101 100 259:2 /var/lib/containers/storage/overlay-containers/` + podmanID + `/userdata/hostname /etc/hostname rw - ext4 /dev/sda1 rw
 `
 
+// Rootless podman 4.9 (captured): runroot without a storage/ component.
+const podmanRootlessMountinfo = `141 84 0:34 / / rw,relatime - overlay overlay rw,lowerdir=/home/amic/.local/share/containers/storage/overlay/l/BVQ3,volatile,userxattr
+137 141 254:0 /tmp/containers-user-1001/containers/overlay-containers/` + podmanID + `/userdata/hostname /etc/hostname rw,relatime - ext4 /dev/root rw
+140 141 254:0 /tmp/containers-user-1001/containers/overlay-containers/` + podmanID + `/userdata/.containerenv /run/.containerenv rw,relatime - ext4 /dev/root rw
+`
+
+// MicroShift 4.20 / CRI-O pod (captured): hostname, resolv.conf and
+// .containerenv come from the pod sandbox (54a0...), passwd from the
+// container (f43d...).
+const microshiftMountinfo = `500 400 0:60 / / rw - overlay overlay rw,lowerdir=/var/lib/containers/storage/overlay/l/X
+501 500 252:3 /lib/kubelet/pods/294151c1-1e7d-4d15-99b2-2248c3614582/etc-hosts /etc/hosts rw - xfs /dev/vda3 rw
+502 500 0:25 /containers/storage/overlay-containers/54a0a8c3c53287e48c2ea701eb26b14b404d87b492f601dae537c071546b74ae/userdata/resolv.conf /etc/resolv.conf rw - tmpfs tmpfs rw
+503 500 0:25 /containers/storage/overlay-containers/54a0a8c3c53287e48c2ea701eb26b14b404d87b492f601dae537c071546b74ae/userdata/hostname /etc/hostname rw - tmpfs tmpfs rw
+504 500 0:25 /containers/storage/overlay-containers/54a0a8c3c53287e48c2ea701eb26b14b404d87b492f601dae537c071546b74ae/userdata/.containerenv /run/.containerenv rw - tmpfs tmpfs rw
+505 500 0:25 /containers/storage/overlay-containers/f43dcca08fbf8b3de85274c6499d6b27dd6fbc5adb5ec61c5babc823ce62cf5e/userdata/passwd /etc/passwd rw - tmpfs tmpfs rw
+`
+
 func file(s string) *fstest.MapFile { return &fstest.MapFile{Data: []byte(s)} }
 
 func env(m map[string]string) func(string) string {
@@ -136,6 +153,23 @@ func TestDetect(t *testing.T) {
 			id:     podmanID,
 		},
 		{
+			name: "podman rootless runroot",
+			fs: fstest.MapFS{
+				"run/.containerenv":   file(""),
+				"proc/self/cgroup":    file("0::/\n"),
+				"proc/self/mountinfo": file(podmanRootlessMountinfo),
+			},
+			env:    map[string]string{"container": "podman"},
+			engine: "podman",
+			id:     podmanID,
+		},
+		{
+			name:   "podman cgroupns host, nested container cgroup",
+			fs:     fstest.MapFS{"proc/self/cgroup": file("0::/machine.slice/libpod-" + podmanID + ".scope/container\n")},
+			engine: "podman",
+			id:     podmanID,
+		},
+		{
 			name: "cri-o storage paths",
 			fs: fstest.MapFS{
 				"proc/self/mountinfo": file(podmanMountinfo),
@@ -143,7 +177,19 @@ func TestDetect(t *testing.T) {
 			env:          map[string]string{"KUBERNETES_SERVICE_HOST": "10.0.0.1"},
 			engine:       "cri-o",
 			orchestrator: "kubernetes",
-			id:           podmanID,
+		},
+		{
+			name: "microshift pod",
+			fs: fstest.MapFS{
+				"run/.containerenv":   file(""),
+				"proc/self/cgroup":    file("0::/\n"),
+				"proc/self/mountinfo": file(microshiftMountinfo),
+				"var/run/secrets/kubernetes.io/serviceaccount/token": file("x"),
+			},
+			env:          map[string]string{"KUBERNETES_SERVICE_HOST": "10.43.0.1"},
+			engine:       "cri-o",
+			orchestrator: "kubernetes",
+			podUID:       "294151c1-1e7d-4d15-99b2-2248c3614582",
 		},
 		{
 			name:   "systemd-nspawn",

@@ -144,9 +144,11 @@ func (d *detector) containerenv(s string) {
 }
 
 var (
-	kubeletPodRe   = regexp.MustCompile(`/kubelet/pods/([0-9a-f-]{36})/`)
-	dockerMountRe  = regexp.MustCompile(`/docker/containers/([0-9a-f]{64})/`)
-	storageMountRe = regexp.MustCompile(`/containers/storage/[^/]+-containers/([0-9a-f]{64})/userdata/`)
+	kubeletPodRe  = regexp.MustCompile(`/kubelet/pods/([0-9a-f-]{36})/`)
+	dockerMountRe = regexp.MustCompile(`/docker/containers/([0-9a-f]{64})/`)
+	// Rootful: /var/lib/containers/storage/overlay-containers/<id>/userdata/.
+	// Rootless runroot: $XDG_RUNTIME_DIR/containers/overlay-containers/<id>/userdata/.
+	storageMountRe = regexp.MustCompile(`/containers/(?:storage/)?[^/]+-containers/([0-9a-f]{64})/userdata/`)
 	criSandboxRe   = regexp.MustCompile(`/io\.containerd\.grpc\.v1\.cri/sandboxes/([0-9a-f]{64})/`)
 )
 
@@ -181,11 +183,13 @@ func (d *detector) mountinfo(mounts []mount) {
 	}
 	for _, m := range mounts {
 		if id := storageMountRe.FindStringSubmatch(m.root); id != nil {
-			engine := "podman"
+			// CRI-O mounts most of these from the pod sandbox's userdata,
+			// not the container's, so the ID is only trusted for podman.
 			if d.r.Orchestrator == "kubernetes" {
-				engine = "cri-o"
+				d.engine("cri-o", "", "mountinfo: "+m.point+" from containers/storage "+id[1][:12])
+			} else {
+				d.engine("podman", id[1], "mountinfo: "+m.point+" from containers/storage")
 			}
-			d.engine(engine, id[1], "mountinfo: "+m.point+" from containers/storage")
 		}
 	}
 	for _, m := range mounts {
@@ -200,14 +204,16 @@ func (d *detector) mountinfo(mounts []mount) {
 	}
 }
 
+// Engines may nest the container below its own cgroup (podman uses
+// libpod-<id>.scope/container), so IDs need only end a path component.
 var cgroupPatterns = []struct {
 	re     *regexp.Regexp
 	engine string
 }{
-	{regexp.MustCompile(`/docker[-/]([0-9a-f]{64})(?:\.scope)?$`), "docker"},
-	{regexp.MustCompile(`/libpod-([0-9a-f]{64})(?:\.scope)?$`), "podman"},
-	{regexp.MustCompile(`/crio-([0-9a-f]{64})(?:\.scope)?$`), "cri-o"},
-	{regexp.MustCompile(`/cri-containerd-([0-9a-f]{64})(?:\.scope)?$`), "containerd"},
+	{regexp.MustCompile(`/docker[-/]([0-9a-f]{64})(?:\.scope)?(?:/|$)`), "docker"},
+	{regexp.MustCompile(`/libpod-([0-9a-f]{64})(?:\.scope)?(?:/|$)`), "podman"},
+	{regexp.MustCompile(`/crio-([0-9a-f]{64})(?:\.scope)?(?:/|$)`), "cri-o"},
+	{regexp.MustCompile(`/cri-containerd-([0-9a-f]{64})(?:\.scope)?(?:/|$)`), "containerd"},
 	{regexp.MustCompile(`/lxc(?:\.payload\.|/)([^/]+)`), "lxc"},
 	{regexp.MustCompile(`/garden/([^/]+)`), "garden"},
 }
