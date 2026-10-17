@@ -6,33 +6,61 @@ The main thing this addresses is the new syscalls that have been released since 
 
 ## Supported architectures & OSs
 
-This is *only* supported on AMD64/Linux as syscalls are platform dependent. In theory it is possible to make it work on ARM but not an immediate priority for me :)
+Linux on amd64 and arm64. Syscall tables are generated per architecture from
+`golang.org/x/sys/unix`.
 
+## How the seccomp check works
 
-## Syscall checking limitations
+amicontained re-executes itself as a child process and stacks a second seccomp
+filter on top of the one it inherited. That filter raises a *user notification*
+for probe syscalls (identified by a cookie argument), and the kernel always
+applies the highest-precedence action across all filters:
 
-One of the limitations I noticed when reading the source is that it's not possible to directly check the availability of certain syscalls as doing so causes the process to break :D So there are some inevitable inaccuracies in syscall blocking.
+- if the container's policy blocks a syscall with an errno, the probe sees that errno;
+- if the policy kills or traps, the child dies with `SIGSYS` and is restarted after that syscall;
+- if the policy allows it, our filter fires and amicontained answers the
+  notification itself — **the syscall is never executed**.
+
+This means the result reflects only the seccomp policy (capabilities, AppArmor
+and SELinux denials are not mistaken for seccomp blocks), every syscall can be
+probed safely, and policies that return `ENOSYS` or use `KILL`/`TRAP` actions
+are reported correctly. It also checks argument-filtered calls such as
+`clone(CLONE_NEWUSER)` and `personality(ADDR_NO_RANDOMIZE)`.
+
+User notification needs Linux 5.0+ and the `seccomp` syscall to be permitted
+(it is under the Docker, containerd and Podman default profiles). Otherwise
+amicontained falls back to an errno heuristic that really executes syscalls
+with zero arguments; the output says when this happens, and those results can
+include false positives from other security layers.
 
 ## Usage
 
 ```bash
-amicontained
+amicontained [-json] [-seccomp-method auto|notify|heuristic|none] [-d]
 ```
 
-Should do the basics and, if you're running in a Docker container, you'll get something like this as output
+Running in a Docker container with the default profile gives something like:
 
-```bash
-Container Runtime: docker
+```
+Container Runtime: not-found
 Has Namespaces:
-        pid: true
-        user: false
+	pid: true
+	user: false
 AppArmor Profile: docker-default (enforce)
 Capabilities:
-        BOUNDING -> chown dac_override fowner fsetid kill setgid setuid setpcap net_bind_service net_raw sys_chroot mknod audit_write setfcap
-Looking for Docker.sock
-Seccomp: filtering
-Blocked Syscalls (68):
-        SYSLOG SETSID USELIB USTAT SYSFS VHANGUP PIVOT_ROOT _SYSCTL ACCT SETTIMEOFDAY MOUNT UMOUNT2 SWAPON SWAPOFF REBOOT SETHOSTNAME SETDOMAINNAME IOPL IOPERM CREATE_MODULE INIT_MODULE DELETE_MODULE GET_KERNEL_SYMS QUERY_MODULE QUOTACTL NFSSERVCTL GETPMSG PUTPMSG AFS_SYSCALL TUXCALL SECURITY LOOKUP_DCOOKIE CLOCK_SETTIME VSERVER MBIND SET_MEMPOLICY GET_MEMPOLICY KEXEC_LOAD ADD_KEY REQUEST_KEY KEYCTL MIGRATE_PAGES UNSHARE MOVE_PAGES PERF_EVENT_OPEN FANOTIFY_INIT OPEN_BY_HANDLE_AT SETNS KCMP FINIT_MODULE KEXEC_FILE_LOAD BPF USERFAULTFD IO_URING_SETUP IO_URING_ENTER IO_URING_REGISTER OPEN_TREE MOVE_MOUNT FSOPEN FSCONFIG FSMOUNT FSPICK PIDFD_GETFD PROCESS_MADVISE MOUNT_SETATTR QUOTACTL_FD LANDLOCK_RESTRICT_SELF SET_MEMPOLICY_HOME_NODE
+	BOUNDING -> chown dac_override fowner fsetid kill setgid setuid setpcap net_bind_service net_raw sys_chroot mknod audit_write setfcap
+Docker Sockets:
+	none found
+Seccomp: filtering (filters: 1, method: user-notification)
+	Default action for unknown syscalls: blocked (ENOSYS)
+Blocked Syscalls (78):
+	EPERM (66): syslog uselib ustat sysfs vhangup pivot_root _sysctl acct settimeofday mount umount2 ...
+	ENOSYS (12): clone3 statmount listmount lsm_get_self_attr lsm_set_self_attr lsm_list_modules mseal ...
+Argument Checks:
+	clone(SIGCHLD) - create a process: allowed
+	clone(CLONE_NEWUSER) - create a user namespace: blocked (EPERM)
+	...
 ```
 
-There's also a `-d` switch to get a load of debugging output as well :)
+`-json` emits the same information as JSON, including the action and errno
+for every syscall. `-d` adds debug output on stderr and lists allowed syscalls.
