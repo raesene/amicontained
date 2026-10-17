@@ -244,6 +244,16 @@ func TestDetect(t *testing.T) {
 	}
 }
 
+func TestServiceAccountToken(t *testing.T) {
+	r := detect(fstest.MapFS{"var/run/secrets/kubernetes.io/serviceaccount/token": file("x")}, env(nil))
+	if !r.ServiceAccountToken {
+		t.Error("token not reported")
+	}
+	if r := detect(fstest.MapFS{}, env(nil)); r.ServiceAccountToken {
+		t.Error("token reported without one")
+	}
+}
+
 func TestEvidenceDeduplicated(t *testing.T) {
 	r := detect(fstest.MapFS{"proc/self/mountinfo": file(dockerMountinfo)}, env(nil))
 	if !slices.Equal(r.Evidence, []string{"mountinfo: /etc/resolv.conf from /var/lib/docker/containers/", "mountinfo: /etc/hostname from /var/lib/docker/containers/"}) {

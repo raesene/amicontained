@@ -15,12 +15,15 @@ import (
 // Runtime is what Detect found. Engine is empty when nothing points to a
 // container, and "unknown" when something does but not to a specific engine.
 type Runtime struct {
-	Engine       string   `json:"engine"`
-	Orchestrator string   `json:"orchestrator,omitempty"`
-	Sandbox      string   `json:"sandbox,omitempty"`
-	ContainerID  string   `json:"container_id,omitempty"`
-	PodUID       string   `json:"pod_uid,omitempty"`
-	Evidence     []string `json:"evidence"`
+	Engine       string `json:"engine"`
+	Orchestrator string `json:"orchestrator,omitempty"`
+	Sandbox      string `json:"sandbox,omitempty"`
+	ContainerID  string `json:"container_id,omitempty"`
+	PodUID       string `json:"pod_uid,omitempty"`
+	// ServiceAccountToken is set when a Kubernetes service account token is
+	// mounted, giving API credentials to anything in the container.
+	ServiceAccountToken bool     `json:"service_account_token"`
+	Evidence            []string `json:"evidence"`
 }
 
 // Detect inspects the running system.
@@ -83,6 +86,7 @@ func detect(fsys fs.FS, getenv func(string) string) *Runtime {
 		d.r.Orchestrator = "kubernetes"
 		d.evidence("/var/run/secrets/kubernetes.io/serviceaccount exists")
 	}
+	d.r.ServiceAccountToken = d.exists("var/run/secrets/kubernetes.io/serviceaccount/token")
 	mounts := procfs.ParseMountinfo(d.read("proc/self/mountinfo"))
 	for _, m := range mounts {
 		if uid := kubeletPodRe.FindStringSubmatch(m.Root); uid != nil {
