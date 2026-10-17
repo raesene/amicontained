@@ -36,7 +36,7 @@ include false positives from other security layers.
 ## Usage
 
 ```bash
-amicontained [-json] [-seccomp-method auto|notify|heuristic|none] [-d]
+amicontained [-json] [-seccomp-method auto|notify|heuristic|none] [-sockets scan|known|none] [-d]
 amicontained -version
 ```
 
@@ -80,8 +80,9 @@ Cgroup: v2 (path /)
 	memory limit: none
 	cpu limit: none
 	pids limit: 70360
-Docker Sockets:
+Container Sockets:
 	none found
+	scan: 535 entries in 2ms
 Seccomp: filtering (filters: 1, method: user-notification)
 	Default action for unknown syscalls: blocked (ENOSYS)
 Blocked Syscalls (78):
@@ -110,6 +111,16 @@ containerd or CRI-O sets none (other than "no LSM confinement" where no LSM
 policy is loaded). Checks that need real syscalls (`lsm_list_modules`,
 `landlock_create_ruleset`) are only made if the seccomp probe found them
 allowed, so a `KILL` profile cannot take the tool down.
+
+Container sockets are looked for at well-known paths (Docker, Podman,
+containerd, CRI-O, cri-dockerd, BuildKit, kubelet, including rootless and
+under any mount point such as a mounted host root), at every bind-mounted
+socket, and with a filesystem walk that skips pseudo-filesystems and stops
+after 5 seconds. Each one is identified with read-only calls: `/_ping` and
+`/version` for the Docker and Podman APIs, and the CRI and containerd
+`Version` gRPC methods. An accessible engine socket is flagged, since it
+usually means control of the host. `-sockets known` skips the walk and
+`-sockets none` skips discovery entirely.
 
 `-json` emits the same information as JSON, including the action and errno
 for every syscall. `-d` adds debug output on stderr and lists allowed syscalls.
