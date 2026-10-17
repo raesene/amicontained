@@ -1,15 +1,11 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
-	"net"
-	"net/http"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -20,6 +16,7 @@ import (
 	"github.com/genuinetools/amicontained/internal/lsm"
 	"github.com/genuinetools/amicontained/internal/procfs"
 	"github.com/genuinetools/amicontained/internal/seccomp"
+	"github.com/genuinetools/amicontained/internal/sockets"
 	"github.com/genuinetools/amicontained/version"
 )
 
@@ -27,6 +24,7 @@ var (
 	debug         bool
 	jsonOutput    bool
 	seccompMethod string
+	socketMode    sockets.Mode
 )
 
 // report is everything amicontained found, in output order.
@@ -40,7 +38,7 @@ type report struct {
 	Capabilities   *procfs.Capabilities `json:"capabilities"`
 	CapsError      string               `json:"capabilities_error,omitempty"`
 	Hardening      *hardening.Report    `json:"hardening"`
-	DockerSocks    []string             `json:"docker_sockets"`
+	Sockets        *sockets.Report      `json:"sockets"`
 	Seccomp        *seccomp.Report      `json:"seccomp"`
 }
 
@@ -55,6 +53,7 @@ func main() {
 	fs.BoolVar(&debug, "d", false, "enable debug logging")
 	fs.BoolVar(&jsonOutput, "json", false, "output results as JSON")
 	fs.StringVar(&seccompMethod, "seccomp-method", "auto", "seccomp probing method: auto, notify, heuristic or none")
+	sockMode := fs.String("sockets", "scan", "socket discovery: scan (well-known paths plus a bounded filesystem walk), known (well-known paths only) or none")
 	showVersion := fs.Bool("version", false, "print version information and exit")
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), "amicontained - a container introspection tool.\n\nUsage: amicontained [flags]\n       amicontained version\n\nFlags:\n")
@@ -75,6 +74,12 @@ func main() {
 	method, err := parseSeccompMethod(seccompMethod)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "amicontained: %v\n", err)
+		os.Exit(2)
+	}
+	switch socketMode = sockets.Mode(*sockMode); socketMode {
+	case sockets.ModeScan, sockets.ModeKnown, sockets.ModeNone:
+	default:
+		fmt.Fprintf(os.Stderr, "amicontained: invalid -sockets %q: want scan, known or none\n", *sockMode)
 		os.Exit(2)
 	}
 
@@ -159,7 +164,11 @@ func gather(method seccomp.Method) *report {
 	}
 	r.Hardening = hardening.Assess(in)
 
-	r.DockerSocks = getValidSockets("/")
+	sockOpts := sockets.Options{Mode: socketMode, Budget: 5 * time.Second, MaxEntries: 2000000}
+	if debug {
+		sockOpts.Debug = os.Stderr
+	}
+	r.Sockets = sockets.Discover(sockOpts)
 
 	return r
 }
@@ -222,13 +231,7 @@ func printReport(w io.Writer, r *report) {
 
 	printHardening(w, r.Hardening)
 
-	fmt.Fprintln(w, "Docker Sockets:")
-	if len(r.DockerSocks) == 0 {
-		fmt.Fprintln(w, "\tnone found")
-	}
-	for _, s := range r.DockerSocks {
-		fmt.Fprintf(w, "\t%s\n", s)
-	}
+	printSockets(w, r.Sockets)
 
 	printSeccomp(w, r.Seccomp)
 }
@@ -351,6 +354,54 @@ func formatCPU(v string) string {
 	return strconv.FormatFloat(q/p, 'f', -1, 64) + " CPUs"
 }
 
+func printSockets(w io.Writer, r *sockets.Report) {
+	if r.Mode == sockets.ModeNone {
+		fmt.Fprintln(w, "Container Sockets: not checked")
+		return
+	}
+	fmt.Fprintln(w, "Container Sockets:")
+	if len(r.Sockets) == 0 {
+		fmt.Fprintln(w, "\tnone found")
+	}
+	others := 0
+	for _, s := range r.Sockets {
+		if !s.Interesting() && !debug {
+			others++
+			continue
+		}
+		fmt.Fprintf(w, "\t%s [%s]: ", s.Path, s.Source)
+		switch {
+		case s.API == "grpc" || s.API == "http":
+			what := s.Product
+			if what == "" {
+				what = "unidentified"
+			}
+			fmt.Fprintf(w, "%s API (%s)\n", s.API, what)
+		case s.Accessible:
+			fmt.Fprintf(w, "%s %s", s.Product, s.Version)
+			if s.Controls() {
+				fmt.Fprint(w, " -> ACCESSIBLE: full control of the engine")
+			}
+			fmt.Fprintln(w)
+		default:
+			if s.Guess != "" {
+				fmt.Fprintf(w, "%s?, ", s.Guess)
+			}
+			fmt.Fprintln(w, s.Error)
+		}
+	}
+	if others > 0 {
+		fmt.Fprintf(w, "\t(+%d other sockets with no container API; -json or -d lists them)\n", others)
+	}
+	if sc := r.Scan; sc != nil {
+		fmt.Fprintf(w, "\tscan: %d entries in %s", sc.Entries, sc.Duration)
+		if sc.Truncated != "" {
+			fmt.Fprintf(w, ", incomplete: %s", sc.Truncated)
+		}
+		fmt.Fprintln(w)
+	}
+}
+
 func printSeccomp(w io.Writer, s *seccomp.Report) {
 	fmt.Fprintf(w, "Seccomp: %s", s.Mode)
 	if s.Mode == seccomp.ModeFiltering {
@@ -427,61 +478,4 @@ func describeAction(r seccomp.Result) string {
 		return string(r.Action) + " (" + r.Detail + ")"
 	}
 	return string(r.Action)
-}
-
-func getValidSockets(startPath string) []string {
-	var found []string
-	err := filepath.Walk(startPath, func(path string, info os.FileInfo, err error) error {
-		if debug {
-			fmt.Fprintln(os.Stderr, "Checking path: "+path)
-		}
-		if err != nil {
-			if debug {
-				fmt.Fprintln(os.Stderr, err)
-			}
-			return nil
-		}
-		if info.Mode()&os.ModeSocket == 0 {
-			return nil
-		}
-		if debug {
-			fmt.Fprintln(os.Stderr, "Valid Socket: "+path)
-		}
-		resp, err := checkSock(path)
-		if err != nil {
-			if debug {
-				fmt.Fprintln(os.Stderr, "Invalid Docker Socket: "+path)
-			}
-			return nil
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode >= 200 && resp.StatusCode <= 299 {
-			found = append(found, path)
-		} else if debug {
-			fmt.Fprintln(os.Stderr, "Invalid Docker Socket: "+path)
-		}
-		return nil
-	})
-	if err != nil && debug {
-		fmt.Fprintln(os.Stderr, err)
-	}
-	return found
-}
-
-func checkSock(path string) (*http.Response, error) {
-	if debug {
-		fmt.Fprintln(os.Stderr, "[-] Checking Sock for HTTP: "+path)
-	}
-	dialer := net.Dialer{Timeout: 100 * time.Millisecond}
-	client := http.Client{
-		Timeout: time.Second,
-		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				return dialer.DialContext(ctx, "unix", path)
-			},
-			ResponseHeaderTimeout: time.Second,
-			DisableKeepAlives:     true,
-		},
-	}
-	return client.Get("http://docker/info")
 }
