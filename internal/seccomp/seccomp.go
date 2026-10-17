@@ -108,6 +108,17 @@ func (r *Report) Blocked() []Result {
 	return blocked
 }
 
+// ArgumentCheck returns the argument probe for call, e.g.
+// "unshare(CLONE_NEWUSER)", if one was run.
+func (r *Report) ArgumentCheck(call string) (Result, bool) {
+	for _, a := range r.ArgumentChecks {
+		if a.Args == call || strings.HasPrefix(a.Args, call+" ") {
+			return a, true
+		}
+	}
+	return Result{}, false
+}
+
 // SafeToCall reports whether other checks may make syscall name for real
 // without risking a KILL or TRAP action, and if not, why. It assumes the
 // policy does not filter on the arguments the caller will use.

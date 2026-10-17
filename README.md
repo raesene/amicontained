@@ -36,63 +36,74 @@ include false positives from other security layers.
 ## Usage
 
 ```bash
-amicontained [-json] [-seccomp-method auto|notify|heuristic|none] [-sockets scan|known|none] [-d]
+amicontained [-v] [-json] [-no-color] [-seccomp-method auto|notify|heuristic|none]
+             [-sockets scan|known|none] [-d]
 amicontained -version
 ```
 
-Running in a Docker container with the default profile gives something like:
+Running in a Docker container with the default profile and the Docker
+socket mounted gives:
 
 ```
-Container Runtime: docker
-	container id: 34be342a559e641b89f4034132272e9def885d07d6ec7672835c8d3aa9a8688d
-	evidence: /.dockerenv exists
-	evidence: mountinfo: /etc/hostname from /var/lib/docker/containers/
-	...
-Namespaces:
-	cgroup: private
-	ipc: private
-	mnt: private
-	net: private
-	pid: private
-	time: host
-	user: host
-	uts: private
-No New Privileges: false
-Security Modules: capability,apparmor,yama,landlock (source: inferred, may be incomplete)
-	AppArmor: docker-default (enforce)
-	Landlock: available (ABI 8)
-Capabilities:
-	effective -> chown dac_override fowner fsetid kill setgid setuid setpcap net_bind_service net_raw sys_chroot mknod audit_write setfcap
-	permitted -> chown dac_override fowner fsetid kill setgid setuid setpcap net_bind_service net_raw sys_chroot mknod audit_write setfcap
-	inheritable -> none
-	bounding -> chown dac_override fowner fsetid kill setgid setuid setpcap net_bind_service net_raw sys_chroot mknod audit_write setfcap
-	ambient -> none
-Privileged Indicators: 0/7 (none present)
-	host devices in /dev: no
-	/sys mounted read-write: no
-	/proc/sys mounted read-write: no
-	masked paths exposed: no
-	all capabilities in bounding set: no -> 14 of 41
-	seccomp disabled: no
-	no LSM confinement: no
-Root Filesystem: read-write
-Cgroup: v2 (path /)
-	memory limit: none
-	cpu limit: none
-	pids limit: 70360
-Container Sockets:
-	none found
-	scan: 535 entries in 2ms
-Seccomp: filtering (filters: 1, method: user-notification)
-	Default action for unknown syscalls: blocked (ENOSYS)
-Blocked Syscalls (78):
-	EPERM (66): syslog uselib ustat sysfs vhangup pivot_root _sysctl acct settimeofday mount umount2 ...
-	ENOSYS (12): clone3 statmount listmount lsm_get_self_attr lsm_set_self_attr lsm_list_modules mseal ...
-Argument Checks:
-	clone(SIGCHLD) - create a process: allowed
-	clone(CLONE_NEWUSER) - create a user namespace: blocked (EPERM)
-	...
+amicontained v0.4.9 - docker container 5679f97efa31
+
+FINDINGS
+  ! /run/docker.sock: Docker Engine API is accessible
+    full control of the container engine, which usually means root on the host
+
+RUNTIME
+  engine        docker
+  container id  5679f97efa31
+  evidence      /.dockerenv exists (+3 more, -v)
+
+ISOLATION
+  namespaces    private: cgroup ipc mnt net pid uts
+                host:    time user
+  privileged    0/7 indicators (none present)
+  rootfs        read-write
+  cgroup        v2; memory none, cpu none, pids 70360
+
+PRIVILEGES
+  capabilities  effective = permitted = bounding (14)
+                chown dac_override fowner fsetid kill setgid setuid setpcap
+                net_bind_service net_raw sys_chroot mknod audit_write setfcap
+                inheritable = ambient: none
+  no_new_privs  false
+
+SECURITY MODULES
+  active        capability apparmor yama landlock (inferred, may be incomplete)
+  apparmor      docker-default (enforce)
+  landlock      available, ABI 8
+
+SOCKETS
+  /run/docker.sock  Docker Engine 29.1.3 (API 1.52)  ACCESSIBLE [well-known]
+
+SECCOMP  filtering, 1 filter(s), method user-notification
+  default       unknown syscalls: blocked (ENOSYS)
+  blocked       78 syscalls
+    EPERM (66)  syslog uselib ustat sysfs vhangup pivot_root _sysctl acct
+                ...
+    ENOSYS (12) clone3 statmount listmount lsm_get_self_attr lsm_set_self_attr
+                lsm_list_modules mseal setxattrat getxattrat listxattrat
+                removexattrat open_tree_attr
+  arguments     clone(SIGCHLD)                  allowed
+                clone(CLONE_NEWUSER)            blocked (EPERM)
+                clone(CLONE_NEWNS)              blocked (EPERM)
+                unshare(CLONE_NEWUSER)          blocked (EPERM)
+                unshare(CLONE_NEWNS)            blocked (EPERM)
+                unshare(CLONE_NEWNET)           blocked (EPERM)
+                personality(PER_LINUX)          allowed
+                personality(ADDR_NO_RANDOMIZE)  blocked (EPERM)
+                socket(AF_VSOCK)                blocked (EPERM)
+                ioctl(TIOCSTI)                  allowed
 ```
+
+The output starts with **findings**: only the ways this environment differs
+from a default, isolated container (`!` breaks isolation, `*` weakens it,
+`i` is context). The sections after it hold the details; long lists are
+summarised unless `-v` is given. Colour is used on a terminal unless
+`NO_COLOR` is set or `-no-color` is passed. `-json` always contains
+everything, including the findings.
 
 The runtime is worked out from several signals (marker files such as
 `/.dockerenv` and `/run/.containerenv`, host paths leaked through
@@ -123,4 +134,5 @@ usually means control of the host. `-sockets known` skips the walk and
 `-sockets none` skips discovery entirely.
 
 `-json` emits the same information as JSON, including the action and errno
-for every syscall. `-d` adds debug output on stderr and lists allowed syscalls.
+for every syscall. `-v` also lists allowed syscalls; `-d` adds debug output
+on stderr.
