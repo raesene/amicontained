@@ -16,9 +16,9 @@ jobs:
     name: Lint, vet, unit tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
 
@@ -78,9 +78,9 @@ jobs:
           - arch: arm64
             runner: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
 
@@ -114,6 +114,17 @@ jobs:
           assert r["findings"] == [], r["findings"]
           print("default profile: ok,", len(blocked), "syscalls not allowed")
           EOF
+
+      - name: Default capabilities and SYS_ADMIN reports
+        run: docker run --rm --cap-add SYS_ADMIN -v /tmp/amicontained:/a:ro alpine /a -json > report-sysadmin.json
+
+      - name: Upload reports
+        uses: actions/upload-artifact@v5
+        with:
+          name: reports-${{ matrix.arch }}
+          path: |
+            report.json
+            report-sysadmin.json
 
       - name: Smoke test with --privileged
         run: |

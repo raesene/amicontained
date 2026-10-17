@@ -1,7 +1,8 @@
 """Compute expected seccomp verdicts for amicontained probes from a moby-format profile,
 and diff them against amicontained -json output.
-usage: expected.py PROFILE.json TABLE.go CAPS(comma) REPORT.json"""
-import json, re, sys
+usage: seccomp-expected.py PROFILE.json TABLE.go CAPS(comma) REPORT.json
+The architecture (amd64 or arm64) is taken from the table's file name."""
+import json, os, re, sys
 
 ERRNO = {1: "EPERM", 13: "EACCES", 38: "ENOSYS"}
 CLONE_NEWUSER, CLONE_NEWNS, CLONE_NEWNET, SIGCHLD = 0x10000000, 0x20000, 0x40000000, 17
@@ -24,8 +25,8 @@ def load(profile, caps):
         inc, exc = r.get("includes", {}), r.get("excludes", {})
         if inc.get("caps") and not set(inc["caps"]) <= caps: continue
         if exc.get("caps") and set(exc["caps"]) & caps: continue
-        if inc.get("arches") and "amd64" not in inc["arches"]: continue
-        if exc.get("arches") and "amd64" in exc["arches"]: continue
+        if inc.get("arches") and ARCH not in inc["arches"]: continue
+        if exc.get("arches") and ARCH in exc["arches"]: continue
         for n in r["names"]:
             rules.setdefault(n, []).append(r)
     return rules
@@ -46,6 +47,7 @@ def verdict(profile, rules, name, args):
     if profile["defaultAction"] == "SCMP_ACT_ALLOW": return "allow"
     return ERRNO.get(profile.get("defaultErrnoRet", 1))
 
+ARCH = "arm64" if "arm64" in os.path.basename(sys.argv[2]) else "amd64"
 profile = json.load(open(sys.argv[1]))
 table = re.findall(r'\{(\d+), "(\w+)"\}', open(sys.argv[2]).read())
 caps = {"CAP_" + c.strip().upper() for c in sys.argv[3].split(",") if c.strip()}
