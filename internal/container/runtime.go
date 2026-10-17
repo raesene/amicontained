@@ -8,6 +8,8 @@ import (
 	"os"
 	"regexp"
 	"strings"
+
+	"github.com/genuinetools/amicontained/internal/procfs"
 )
 
 // Runtime is what Detect found. Engine is empty when nothing points to a
@@ -81,12 +83,12 @@ func detect(fsys fs.FS, getenv func(string) string) *Runtime {
 		d.r.Orchestrator = "kubernetes"
 		d.evidence("/var/run/secrets/kubernetes.io/serviceaccount exists")
 	}
-	mounts := mountRoots(d.read("proc/self/mountinfo"))
+	mounts := procfs.ParseMountinfo(d.read("proc/self/mountinfo"))
 	for _, m := range mounts {
-		if uid := kubeletPodRe.FindStringSubmatch(m.root); uid != nil {
+		if uid := kubeletPodRe.FindStringSubmatch(m.Root); uid != nil {
 			d.r.Orchestrator = "kubernetes"
 			d.r.PodUID = uid[1]
-			d.evidence("mountinfo: " + m.point + " from kubelet pod " + uid[1])
+			d.evidence("mountinfo: " + m.Point + " from kubelet pod " + uid[1])
 			break
 		}
 	}
@@ -152,53 +154,30 @@ var (
 	criSandboxRe   = regexp.MustCompile(`/io\.containerd\.grpc\.v1\.cri/sandboxes/([0-9a-f]{64})/`)
 )
 
-type mount struct {
-	root, point, fstype, superOpts string
-}
-
-// mountRoots parses /proc/self/mountinfo. The root field is the path inside
-// the source filesystem, which for bind mounts leaks host paths such as
-// /var/lib/docker/containers/<id>/hostname.
-func mountRoots(s string) []mount {
-	var out []mount
-	for _, line := range strings.Split(s, "\n") {
-		pre, post, ok := strings.Cut(line, " - ")
-		if !ok {
-			continue
-		}
-		f, g := strings.Fields(pre), strings.Fields(post)
-		if len(f) < 5 || len(g) < 3 {
-			continue
-		}
-		out = append(out, mount{root: f[3], point: f[4], fstype: g[0], superOpts: g[2]})
-	}
-	return out
-}
-
-func (d *detector) mountinfo(mounts []mount) {
+func (d *detector) mountinfo(mounts []procfs.Mount) {
 	for _, m := range mounts {
-		if id := dockerMountRe.FindStringSubmatch(m.root); id != nil {
-			d.engine("docker", id[1], "mountinfo: "+m.point+" from /var/lib/docker/containers/")
+		if id := dockerMountRe.FindStringSubmatch(m.Root); id != nil {
+			d.engine("docker", id[1], "mountinfo: "+m.Point+" from /var/lib/docker/containers/")
 		}
 	}
 	for _, m := range mounts {
-		if id := storageMountRe.FindStringSubmatch(m.root); id != nil {
+		if id := storageMountRe.FindStringSubmatch(m.Root); id != nil {
 			// CRI-O mounts most of these from the pod sandbox's userdata,
 			// not the container's, so the ID is only trusted for podman.
 			if d.r.Orchestrator == "kubernetes" {
-				d.engine("cri-o", "", "mountinfo: "+m.point+" from containers/storage "+id[1][:12])
+				d.engine("cri-o", "", "mountinfo: "+m.Point+" from containers/storage "+id[1][:12])
 			} else {
-				d.engine("podman", id[1], "mountinfo: "+m.point+" from containers/storage")
+				d.engine("podman", id[1], "mountinfo: "+m.Point+" from containers/storage")
 			}
 		}
 	}
 	for _, m := range mounts {
-		if id := criSandboxRe.FindStringSubmatch(m.root); id != nil {
-			d.engine("containerd", "", "mountinfo: "+m.point+" from containerd CRI sandbox "+id[1][:12])
+		if id := criSandboxRe.FindStringSubmatch(m.Root); id != nil {
+			d.engine("containerd", "", "mountinfo: "+m.Point+" from containerd CRI sandbox "+id[1][:12])
 		}
 	}
 	for _, m := range mounts {
-		if m.point == "/" && m.fstype == "overlay" && strings.Contains(m.superOpts, "/io.containerd.snapshotter.v1.") {
+		if m.Point == "/" && m.FSType == "overlay" && strings.Contains(m.SuperOpts, "/io.containerd.snapshotter.v1.") {
 			d.engine("containerd", "", "mountinfo: / is a containerd snapshot")
 		}
 	}

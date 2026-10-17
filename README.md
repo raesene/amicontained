@@ -48,16 +48,38 @@ Container Runtime: docker
 	evidence: /.dockerenv exists
 	evidence: mountinfo: /etc/hostname from /var/lib/docker/containers/
 	...
-Has Namespaces:
-	pid: true
-	user: false
-AppArmor Profile: docker-default (enforce)
+Namespaces:
+	cgroup: private
+	ipc: private
+	mnt: private
+	net: private
+	pid: private
+	time: host
+	user: host
+	uts: private
+No New Privileges: false
+Security Modules: capability,apparmor,yama,landlock (source: inferred, may be incomplete)
+	AppArmor: docker-default (enforce)
+	Landlock: available (ABI 8)
 Capabilities:
 	effective -> chown dac_override fowner fsetid kill setgid setuid setpcap net_bind_service net_raw sys_chroot mknod audit_write setfcap
 	permitted -> chown dac_override fowner fsetid kill setgid setuid setpcap net_bind_service net_raw sys_chroot mknod audit_write setfcap
 	inheritable -> none
 	bounding -> chown dac_override fowner fsetid kill setgid setuid setpcap net_bind_service net_raw sys_chroot mknod audit_write setfcap
 	ambient -> none
+Privileged Indicators: 0/7 (none present)
+	host devices in /dev: no
+	/sys mounted read-write: no
+	/proc/sys mounted read-write: no
+	masked paths exposed: no
+	all capabilities in bounding set: no -> 14 of 41
+	seccomp disabled: no
+	no LSM confinement: no
+Root Filesystem: read-write
+Cgroup: v2 (path /)
+	memory limit: none
+	cpu limit: none
+	pids limit: 70360
 Docker Sockets:
 	none found
 Seccomp: filtering (filters: 1, method: user-notification)
@@ -78,6 +100,16 @@ Kubernetes service account/environment), and every signal that matched is
 listed as evidence. It recognises Docker, Podman, containerd, CRI-O, LXC,
 systemd-nspawn, OpenVZ and Garden, Kubernetes as an orchestrator, and gVisor
 as a sandbox.
+
+Namespaces are compared against the kernel's fixed inode numbers for the
+initial ("host") namespaces, so the answer is exact; on kernels older than
+7.0 the net and mnt answers rely on allocation order and are marked
+"(likely)". Privileged indicators are the usual effects of `--privileged`;
+`--privileged` sets all seven, a default container from Docker, Podman,
+containerd or CRI-O sets none (other than "no LSM confinement" where no LSM
+policy is loaded). Checks that need real syscalls (`lsm_list_modules`,
+`landlock_create_ruleset`) are only made if the seccomp probe found them
+allowed, so a `KILL` profile cannot take the tool down.
 
 `-json` emits the same information as JSON, including the action and errno
 for every syscall. `-d` adds debug output on stderr and lists allowed syscalls.

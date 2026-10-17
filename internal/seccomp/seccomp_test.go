@@ -338,3 +338,29 @@ func mustRead(t *testing.T, path string) string {
 	}
 	return string(b)
 }
+
+func TestSafeToCall(t *testing.T) {
+	r := &Report{Mode: ModeFiltering, Syscalls: []Result{
+		{Syscall: "landlock_create_ruleset", Action: ActionAllow},
+		{Syscall: "lsm_list_modules", Action: ActionErrno, Errno: "ENOSYS"},
+		{Syscall: "kexec_load", Action: ActionKill},
+		{Syscall: "uretprobe", Action: ActionExempt},
+	}}
+	for name, want := range map[string]bool{
+		"landlock_create_ruleset": true,
+		"lsm_list_modules":        false,
+		"kexec_load":              false,
+		"uretprobe":               false,
+		"not_a_syscall":           false,
+	} {
+		if got, why := r.SafeToCall(name); got != want || (!got && why == "") {
+			t.Errorf("SafeToCall(%s) = %t %q, want %t", name, got, why, want)
+		}
+	}
+	if ok, _ := (&Report{Mode: ModeDisabled}).SafeToCall("anything"); !ok {
+		t.Error("disabled mode: want safe")
+	}
+	if ok, _ := (&Report{Mode: ModeStrict}).SafeToCall("anything"); ok {
+		t.Error("strict mode: want unsafe")
+	}
+}
