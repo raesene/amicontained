@@ -45,7 +45,7 @@ Static binaries for linux/amd64 and linux/arm64 are attached to each
 [release](https://github.com/raesene/amicontained/releases):
 
 ```bash
-VERSION=0.0.4   # release tag without the leading "v"
+VERSION=0.4.9   # release tag without the leading "v"
 ARCH=amd64      # or arm64
 curl -fsSLO "https://github.com/raesene/amicontained/releases/download/v${VERSION}/amicontained_${VERSION}_linux_${ARCH}.tar.gz"
 tar -xzf "amicontained_${VERSION}_linux_${ARCH}.tar.gz" amicontained
@@ -257,9 +257,11 @@ docker run --rm --security-opt seccomp=unconfined \
 ```
 
 CI (`.github/workflows/ci.yml`) runs formatting, vendoring and
-generated-code checks, vet for both architectures, the unit tests, the
-seccomp tests in a container, and smoke tests under Docker's default profile
-and `--privileged`.
+generated-code checks, vet for both architectures and the unit tests, then
+runs the seccomp tests and smoke tests (Docker's default profile and
+`--privileged`) in containers on both an amd64 and a native arm64 runner.
+The `-json` reports are kept as build artifacts and can be checked against a
+moby-format profile with `hack/seccomp-expected.py`.
 
 **New kernel syscalls.** The syscall tables in
 `internal/seccomp/zsyscalls_linux_*.go` are generated from `golang.org/x/sys`:
@@ -281,13 +283,18 @@ python3 hack/ansi2svg.py run.ansi "docker run ..." > shot.svg
 rsvg-convert -z 1.5 shot.svg -o docs/screenshot.png
 ```
 
-**Releases** are built by GoReleaser when a `v*` tag is pushed. The binary
-reports the version in `VERSION.txt`, which deliberately differs from the
-tag.
+**Releases**: set `VERSION.txt`, merge, then tag and push:
+
+```bash
+git tag -a v0.4.9 -m v0.4.9 && git push origin v0.4.9
+```
+
+The release workflow runs the full CI suite on amd64 and arm64, checks the
+tag matches `VERSION.txt`, and then GoReleaser publishes the binaries and
+checksums.
 
 ## Limitations
 
-- arm64 builds and passes vet but has not yet been run on arm64 hardware.
 - Only the native syscall ABI is probed. Policies that forget to filter the
   i386 (`int 0x80`) or x32 ABIs on amd64 are not detected yet.
 - The kernel can't report whether a process is restricted by Landlock, only

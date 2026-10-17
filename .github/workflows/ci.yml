@@ -3,7 +3,10 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    # ci/* branches run CI on push so workflow changes can be tried before a PR.
+    branches: [main, 'ci/**']
+  # release.yml calls this so a tag is only released after the tests pass.
+  workflow_call:
 
 permissions:
   contents: read
@@ -13,9 +16,9 @@ jobs:
     name: Lint, vet, unit tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
 
@@ -59,19 +62,32 @@ jobs:
           done
           file /tmp/amicontained-*
 
+  # Syscall numbers and the probe's BPF filter are per-architecture, so the
+  # seccomp tests run natively on both. ubuntu-24.04-arm is real arm64
+  # hardware; qemu-user would not emulate seccomp faithfully.
   container:
-    name: Seccomp and smoke tests in containers
-    runs-on: ubuntu-latest
+    name: Seccomp and smoke tests (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
 
       - name: Build
         run: |
+          test "$(go env GOARCH)" = "${{ matrix.arch }}"
+          uname -m
           CGO_ENABLED=0 go build -trimpath -o /tmp/amicontained .
           CGO_ENABLED=0 go test -c -o /tmp/seccomp.test ./internal/seccomp
 
@@ -98,6 +114,17 @@ jobs:
           assert r["findings"] == [], r["findings"]
           print("default profile: ok,", len(blocked), "syscalls not allowed")
           EOF
+
+      - name: Default capabilities and SYS_ADMIN reports
+        run: docker run --rm --cap-add SYS_ADMIN -v /tmp/amicontained:/a:ro alpine /a -json > report-sysadmin.json
+
+      - name: Upload reports
+        uses: actions/upload-artifact@v5
+        with:
+          name: reports-${{ matrix.arch }}
+          path: |
+            report.json
+            report-sysadmin.json
 
       - name: Smoke test with --privileged
         run: |

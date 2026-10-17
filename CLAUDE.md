@@ -51,6 +51,11 @@ Dockerfile             - static build, FROM scratch image
 - `make static` builds `./amicontained`. `go vet ./... && GOARCH=arm64 go vet ./...`
   before committing; CI also checks gofmt, `go mod tidy/vendor` and
   `go generate` produce no diff.
+- CI runs the hermetic seccomp tests and smoke tests on `ubuntu-latest` and
+  `ubuntu-24.04-arm` (native arm64; qemu-user would not do). Push to a
+  `ci/*` branch to run CI without a PR. The smoke `-json` reports are
+  uploaded as artifacts (`gh run download <id>`) for
+  `hack/seccomp-expected.py`.
 - `make test` runs only tests that are safe anywhere: fixture-driven
   packages, fake HTTP/gRPC servers on unix sockets in a temp dir, and the
   pure seccomp unit tests
@@ -83,12 +88,14 @@ ssh rorym@192.168.41.108 docker run --rm -v /tmp/amicontained:/a:ro alpine /a [-
 
 **Ground truth for seccomp.** `hack/seccomp-expected.py PROFILE.json
 internal/seccomp/zsyscalls_linux_amd64.go CAPS REPORT.json` diffs a `-json`
-report against verdicts computed from a moby-format profile
+report against verdicts computed from a moby-format profile (the
+architecture comes from the table's file name)
 (`github.com/moby/profiles`, tag `seccomp/v0.1.0` for Docker 29; a copy may
 be in `/tmp/amic-groundtruth/` on the dev machine). With Docker's default
 profile, the only expected mismatches are `uretprobe` (`exempt` by design)
-and 457-467 (ENOSYS: runc on the test server links libseccomp 2.5.5, which
-predates them; that is real enforcement, not a bug).
+and 457-467 (ENOSYS: runc on the test server and on GitHub's runners links a
+libseccomp that predates them; that is real enforcement, not a bug). The
+same holds on arm64 (minus `uretprobe`, which is x86-only).
 
 Scenarios worth re-running after seccomp changes: default profile,
 `--cap-add SYS_ADMIN`/`ALL` (cap-conditional rules), `seccomp=unconfined`
@@ -189,15 +196,17 @@ Things that are not obvious from reading one file:
 
 ## Release process
 
-1. `main` is green in CI and the scenarios above pass on the test server.
-2. `git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z`.
-3. `release.yml` (tag pushes only) runs GoReleaser v2, which publishes
-   linux/amd64 and linux/arm64 tarballs and checksums to
-   `raesene/amicontained` (`release.github.owner` is hard-coded).
+1. Bump `VERSION.txt` in a PR; `main` is green in CI.
+2. `git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z`. The user has
+   asked for tagging to be how releases are cut.
+3. `release.yml` (tag pushes only) runs `ci.yml` (amd64 + arm64), fails if
+   the tag != `VERSION.txt`, then GoReleaser v2 publishes linux/amd64 and
+   linux/arm64 tarballs and checksums to `raesene/amicontained`
+   (`release.github.owner` is hard-coded).
 
-`VERSION.txt` (`v0.4.9`, baked into the binary via `AMICONTAINED_VERSION` in
-`release.yml`) and the git tags (`v0.0.x`, artifact names) are deliberately
-out of sync. Do not "fix" this without asking. `goreleaser check` and a
+Up to v0.0.4 the tags (`v0.0.x`) and `VERSION.txt` (`v0.4.9`, upstream
+heritage) were deliberately out of sync. From v0.4.9 the user chose to align
+them, and the release workflow enforces it. `goreleaser check` and a
 snapshot build can be run locally via the `goreleaser/goreleaser` image.
 
 ## Working with this user
@@ -217,9 +226,6 @@ snapshot build can be run locally via the `goreleaser/goreleaser` image.
 
 ## Open items
 
-- **arm64 has never run on real hardware.** It builds, vets and is
-  released. Test on Graviton or an arm VM (qemu-user does not emulate
-  seccomp faithfully).
 - i386 (`int 0x80`) and x32 (`nr | 0x40000000`) ABIs are not probed;
   policies that only filter the native arch are a classic bypass. i386
   needs a Go assembly stub; x32 can use `Syscall6`.
