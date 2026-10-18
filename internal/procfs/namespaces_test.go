@@ -88,3 +88,16 @@ func TestParseNSLink(t *testing.T) {
 		t.Error("type mismatch: want error")
 	}
 }
+
+func TestClassifyNamespacesUnsupported(t *testing.T) {
+	inodes := map[string]uint64{}
+	for k, v := range docker70 {
+		inodes[k] = v
+	}
+	delete(inodes, "time")
+	for _, ns := range ClassifyNamespaces(inodes, map[string]error{"time": ErrUnsupported}, "") {
+		if ns.Type == "time" && (!ns.Unsupported || ns.Error != "" || ns.Host) {
+			t.Errorf("time: %+v, want unsupported", ns)
+		}
+	}
+}

@@ -168,11 +168,25 @@ Things that are not obvious from reading one file:
   Podman nests the container at `libpod-<id>.scope/container` with
   `--cgroupns=host`; rootless bind mounts come from the runroot without a
   `storage/` component.
+- **Sandboxes**: gVisor from `/proc/version`; Kata from
+  `systemd.unit=kata-containers.target` on `/proc/cmdline` (the guest's) or
+  shared-file mounts (virtiofs `kataShared` on QEMU, go and runtime-rs;
+  `/kata-containers/shared/containers/` roots on Firecracker). Inside a
+  sandbox, kernel-level findings become `info` with "inside the X sandbox";
+  socket and service account token findings keep their severity. Kata runs
+  containers in the guest's initial net namespace, so every Kata pod
+  "shares" it. A collapsed privileged finding hides the dangerous-caps
+  finding only when it includes "all capabilities" (privileged gVisor has
+  no NET_RAW). Verified on the test server's `kata-exp` vmm cluster
+  (runtime classes `kata-qemu`, `kata-qemu-runtime-rs`, `kata-fc`,
+  `gvisor`), if it still exists.
 - **Namespaces** compare `/proc/self/ns/*` inodes with the kernel's fixed
   initial-namespace numbers (`0xEFFFFFFF` ipc … `0xEFFFFFF8` mnt). net/mnt
   only got fixed numbers recently (present on 7.0; on 6.1/6.12 they are the
   first dynamic numbers `0xF0000000`/`0xF0000001`), so they are "likely"
-  unless the kernel is >= 7.0 or the fixed number is seen.
+  unless the kernel is >= 7.0 or the fixed number is seen. A missing
+  `/proc/self/ns/<type>` is "not supported by this kernel" (time in Kata
+  guests and gVisor, cgroup in gVisor), not an error.
 - **LSMs**: securityfs `lsm`, else `lsm_list_modules`, else inferred
   (partial; securityfs is not mounted in Docker containers). Inactive Smack
   returns EINVAL on `attr/smack/current`. Landlock enforcement cannot be
@@ -231,7 +245,8 @@ snapshot build can be run locally via the `goreleaser/goreleaser` image.
   needs a Go assembly stub; x32 can use `Syscall6`.
 - Untested on real systems: SELinux with an enforcing policy, AppArmor
   complain mode, Smack, cgroup v1, LXC, systemd-nspawn, OpenVZ, BuildKit and
-  cri-dockerd sockets. Kata is not detected.
+  cri-dockerd sockets. Kata with Cloud Hypervisor or Dragonball, and
+  Kata outside Kubernetes.
 - The kernel version that introduced fixed net/mnt namespace inodes is not
   pinned down (somewhere after 6.12, at or before 7.0).
 - Optional idea: a "denied by other layers" view (caps/LSM), clearly

@@ -2,6 +2,7 @@ package report
 
 import (
 	"bytes"
+	"slices"
 	"strings"
 	"testing"
 
@@ -160,6 +161,50 @@ func TestFindings(t *testing.T) {
 			[]string{"info: running in a gvisor sandbox", "info: privileged inside the gvisor sandbox (6/7 indicators)"},
 		},
 		{
+			"gvisor, cap-add SYS_ADMIN SYS_PTRACE NET_ADMIN",
+			func(r *Report) {
+				r.Runtime = &container.Runtime{Engine: "unknown", Sandbox: "gvisor"}
+				r.Hardening.Privileged = indicators("host devices in /dev", "/proc/sys mounted read-write",
+					"masked paths exposed", "seccomp disabled", "no LSM confinement")
+				r.Seccomp = &seccomp.Report{Mode: seccomp.ModeDisabled}
+				r.Capabilities.Bounding = capSet(append(defaultCaps, "sys_admin", "sys_ptrace", "net_admin"))
+			},
+			// The collapsed finding no longer hides the added capabilities.
+			[]string{"info: running in a gvisor sandbox", "info: privileged inside the gvisor sandbox (5/7 indicators)",
+				"info: dangerous capabilities inside the gvisor sandbox: sys_admin sys_ptrace net_admin"},
+		},
+		{
+			"kata default pod",
+			func(r *Report) {
+				r.Runtime = &container.Runtime{Engine: "unknown", Orchestrator: "kubernetes", Sandbox: "kata", ServiceAccountToken: true}
+				r.Hardening.Privileged = indicators("masked paths exposed", "seccomp disabled", "no LSM confinement")
+				r.Seccomp = &seccomp.Report{Mode: seccomp.ModeDisabled}
+				r.LSM = &lsm.Report{}
+				r.Namespaces = namespaces("net")
+			},
+			// The service account token crosses the VM boundary; the rest
+			// describes the guest.
+			[]string{"medium: Kubernetes service account token is mounted",
+				"info: running in a kata sandbox",
+				"info: masked paths exposed inside the kata sandbox",
+				"info: seccomp is disabled inside the kata sandbox",
+				"info: no LSM confinement inside the kata sandbox",
+				"info: shares the kata sandbox's initial net namespace"},
+		},
+		{
+			"kata privileged",
+			func(r *Report) {
+				r.Runtime = &container.Runtime{Engine: "unknown", Sandbox: "kata"}
+				r.Hardening.Privileged = indicators("/sys mounted read-write", "/proc/sys mounted read-write",
+					"masked paths exposed", "all capabilities in bounding set", "seccomp disabled", "no LSM confinement")
+				r.Seccomp = &seccomp.Report{Mode: seccomp.ModeDisabled}
+				r.Capabilities.Bounding = capSet(append(defaultCaps, "sys_admin", "sys_module"))
+				r.Namespaces = namespaces("net")
+			},
+			[]string{"info: running in a kata sandbox", "info: privileged inside the kata sandbox (6/7 indicators)",
+				"info: shares the kata sandbox's initial net namespace"},
+		},
+		{
 			"rootless podman --privileged",
 			func(r *Report) {
 				r.UserNamespace = true
@@ -223,15 +268,23 @@ func TestWriteText(t *testing.T) {
 			t.Errorf("missing %q\n%s", s, out)
 		}
 	}
+	r.Namespaces[slices.IndexFunc(r.Namespaces, func(ns procfs.Namespace) bool { return ns.Type == "time" })] = procfs.Namespace{Type: "time", Unsupported: true}
 	r.Hardening.Privileged = indicators("host devices in /dev", "/sys mounted read-write", "/proc/sys mounted read-write",
 		"masked paths exposed", "all capabilities in bounding set", "seccomp disabled", "no LSM confinement")
 	r.UserNamespace = true
+	// Privileged gVisor lacks net_raw, so the dangerous capabilities get a
+	// long finding of their own that must wrap.
+	r.Runtime.Sandbox = "gvisor"
+	r.Hardening.Privileged.Indicators[4].Present = false
+	r.Capabilities.Bounding = capSet(append(defaultCaps, dangerousCaps...))
 	r.ComputeFindings()
 	b.Reset()
 	r.WriteText(&b, TextOptions{})
 	out = b.String()
-	if !strings.Contains(out, "in a user namespace") {
-		t.Errorf("user namespace caveat missing\n%s", out)
+	for _, s := range []string{"in a user namespace", "host:    user\n", "absent:  time (not supported by this kernel)"} {
+		if !strings.Contains(out, s) {
+			t.Errorf("missing %q\n%s", s, out)
+		}
 	}
 	for _, line := range strings.Split(out, "\n") {
 		if len(line) > lineWidth+20 {
@@ -253,12 +306,12 @@ func TestWriteText(t *testing.T) {
 }
 
 func TestFormat(t *testing.T) {
-	for in, want := range map[string]string{"268435456": "256 MiB", "max": "none", "": "unknown"} {
+	for in, want := range map[string]string{"268435456": "256 MiB", "12547133440": "11.69 GiB", "max": "none", "": "unknown"} {
 		if got := formatMemory(in); got != want {
 			t.Errorf("formatMemory(%q) = %q, want %q", in, got, want)
 		}
 	}
-	for in, want := range map[string]string{"150000 100000": "1.5 CPUs", "max 100000": "none"} {
+	for in, want := range map[string]string{"150000 100000": "1.5 CPUs", "100000 300000": "0.33 CPUs", "max 100000": "none"} {
 		if got := formatCPU(in); got != want {
 			t.Errorf("formatCPU(%q) = %q, want %q", in, got, want)
 		}

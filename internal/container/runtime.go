@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/genuinetools/amicontained/internal/procfs"
@@ -75,6 +76,12 @@ func detect(fsys fs.FS, getenv func(string) string) *Runtime {
 		d.r.Sandbox = "gvisor"
 		d.evidence("/proc/version: " + strings.TrimSpace(v))
 	}
+	// The Kata agent boots its guest into kata-containers.target, and the
+	// guest kernel's command line is visible to unprivileged containers.
+	if slices.Contains(strings.Fields(d.read("proc/cmdline")), "systemd.unit=kata-containers.target") {
+		d.r.Sandbox = "kata"
+		d.evidence("/proc/cmdline: systemd.unit=kata-containers.target")
+	}
 
 	// Kubernetes is checked before the engine so that CRI-O and podman,
 	// which share container storage paths, can be told apart.
@@ -103,6 +110,7 @@ func detect(fsys fs.FS, getenv func(string) string) *Runtime {
 	if d.exists("run/.containerenv") {
 		d.containerenv(d.read("run/.containerenv"))
 	}
+	d.kataMounts(mounts)
 	d.mountinfo(mounts)
 	d.cgroup(d.read("proc/self/cgroup"))
 
@@ -127,6 +135,38 @@ func detect(fsys fs.FS, getenv func(string) string) *Runtime {
 		d.r.Engine = "unknown"
 	}
 	return &d.r
+}
+
+// SandboxKernel says whose kernel the kernel-level results describe inside
+// a sandbox.
+func SandboxKernel(sandbox string) string {
+	switch sandbox {
+	case "gvisor":
+		return "gVisor's own kernel"
+	case "kata":
+		return "the pod VM's guest kernel"
+	}
+	return "the " + sandbox + " sandbox's kernel"
+}
+
+// kataMounts finds files the Kata agent shares into the guest: over
+// virtiofs (source kataShared) with QEMU, or bind-mounted from the guest's
+// kata-containers/shared/containers/ with Firecracker, which has no virtiofs.
+func (d *detector) kataMounts(mounts []procfs.Mount) {
+	for _, m := range mounts {
+		var e string
+		switch {
+		case m.FSType == "virtiofs" && m.Source == "kataShared":
+			e = "mountinfo: " + m.Point + " from virtiofs kataShared"
+		case strings.Contains(m.Root, "/kata-containers/shared/containers/"):
+			e = "mountinfo: " + m.Point + " from kata-containers/shared/containers/"
+		default:
+			continue
+		}
+		d.r.Sandbox = "kata"
+		d.evidence(e)
+		return
+	}
 }
 
 // containerenv handles podman's /run/.containerenv, which holds key="value"

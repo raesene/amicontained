@@ -157,7 +157,14 @@ func (p *printer) findings(fs []Finding) {
 		default:
 			mark = p.cyan("i")
 		}
-		fmt.Fprintf(p.w, "  %s %s\n", mark, f.Summary)
+		summary := wrap(f.Summary, lineWidth-4)
+		if len(summary) == 0 {
+			summary = []string{""}
+		}
+		fmt.Fprintf(p.w, "  %s %s\n", mark, summary[0])
+		for _, line := range summary[1:] {
+			fmt.Fprintf(p.w, "    %s\n", line)
+		}
 		for _, line := range wrap(f.Detail, lineWidth-4) {
 			fmt.Fprintf(p.w, "    %s\n", p.dim(line))
 		}
@@ -211,15 +218,17 @@ func (p *printer) runtime(r *Report) {
 func (p *printer) isolation(r *Report) {
 	p.section("ISOLATION")
 
-	var private, host, errs []string
+	var private, host, unsupported, errs []string
 	likely := false
 	for _, ns := range r.Namespaces {
 		name := ns.Type
-		if !ns.Exact && ns.Error == "" {
+		if !ns.Exact && ns.Error == "" && !ns.Unsupported {
 			name += "?"
 			likely = true
 		}
 		switch {
+		case ns.Unsupported:
+			unsupported = append(unsupported, ns.Type)
 		case ns.Error != "":
 			errs = append(errs, ns.Type+" ("+ns.Error+")")
 		case ns.Host:
@@ -230,6 +239,9 @@ func (p *printer) isolation(r *Report) {
 	}
 	p.field("namespaces", "private: "+orNone(private))
 	p.field("", "host:    "+orNone(host))
+	if len(unsupported) > 0 {
+		p.field("", "absent:  "+strings.Join(unsupported, " ")+" (not supported by this kernel)")
+	}
 	if len(errs) > 0 {
 		p.field("", "error:   "+strings.Join(errs, ", "))
 	}
@@ -249,7 +261,7 @@ func (p *printer) isolation(r *Report) {
 
 	h := r.Hardening
 	pr := h.Privileged
-	p.field("privileged", fmt.Sprintf("%d/%d indicators (%s)", pr.Present, len(pr.Indicators), pr.Verdict))
+	p.list("privileged", strings.Fields(fmt.Sprintf("%d/%d indicators (%s)", pr.Present, len(pr.Indicators), pr.Verdict)))
 	for _, i := range pr.Indicators {
 		if !i.Present && !p.Verbose {
 			continue
@@ -531,7 +543,7 @@ func formatMemory(v string) string {
 		f /= 1024
 		u++
 	}
-	return strconv.FormatFloat(f, 'f', -1, 64) + " " + units[u]
+	return formatFloat(f) + " " + units[u]
 }
 
 func formatCPU(v string) string {
@@ -541,5 +553,11 @@ func formatCPU(v string) string {
 	if !ok || err1 != nil || err2 != nil || pd == 0 {
 		return formatLimit(quota)
 	}
-	return strconv.FormatFloat(q/pd, 'f', -1, 64) + " CPUs"
+	return formatFloat(q/pd) + " CPUs"
+}
+
+// formatFloat keeps up to two decimals: 1.5, 11.69, 256.
+func formatFloat(f float64) string {
+	s := strconv.FormatFloat(f, 'f', 2, 64)
+	return strings.TrimSuffix(strings.TrimRight(s, "0"), ".")
 }

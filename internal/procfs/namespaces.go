@@ -1,7 +1,9 @@
 package procfs
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"strconv"
 	"strings"
@@ -18,8 +20,11 @@ type Namespace struct {
 	Host bool `json:"host"`
 	// Exact is false when the answer rests on inode allocation order rather
 	// than a number fixed by the kernel.
-	Exact bool   `json:"exact"`
-	Error string `json:"error,omitempty"`
+	Exact bool `json:"exact"`
+	// Unsupported is true when the kernel lacks this namespace type, as
+	// gVisor and some VM guest kernels lack time and cgroup namespaces.
+	Unsupported bool   `json:"unsupported,omitempty"`
+	Error       string `json:"error,omitempty"`
 }
 
 // NamespaceTypes is the order namespaces are reported in.
@@ -65,8 +70,20 @@ func Namespaces() []Namespace {
 	if unix.Uname(&uts) == nil {
 		release = unix.ByteSliceToString(uts.Release[:])
 	}
+	// A missing link means the kernel lacks that type, unless the whole
+	// directory is missing (no /proc).
+	if _, err := os.Stat("/proc/self/ns"); err == nil {
+		for t, err := range errs {
+			if errors.Is(err, fs.ErrNotExist) {
+				errs[t] = ErrUnsupported
+			}
+		}
+	}
 	return ClassifyNamespaces(inodes, errs, release)
 }
+
+// ErrUnsupported marks a namespace type the kernel does not have.
+var ErrUnsupported = errors.New("not supported by this kernel")
 
 func parseNSLink(t, link string) (uint64, error) {
 	// "pid:[4026531836]"
@@ -91,7 +108,11 @@ func ClassifyNamespaces(inodes map[string]uint64, errs map[string]error, release
 	for _, t := range NamespaceTypes {
 		ns := Namespace{Type: t}
 		if err := errs[t]; err != nil {
-			ns.Error = err.Error()
+			if errors.Is(err, ErrUnsupported) {
+				ns.Unsupported = true
+			} else {
+				ns.Error = err.Error()
+			}
 			out = append(out, ns)
 			continue
 		}
