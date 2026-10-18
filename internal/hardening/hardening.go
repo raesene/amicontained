@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/genuinetools/amicontained/internal/container"
 	"github.com/genuinetools/amicontained/internal/procfs"
 )
 
@@ -52,8 +53,8 @@ type Inputs struct {
 	SeccompDisabled bool
 	LSMConfined     bool
 	UserNamespace   bool
-	// Sandbox is a detected sandbox such as gvisor, whose emulated kernel
-	// is what these indicators describe.
+	// Sandbox is a detected sandbox such as gvisor or kata, whose kernel is
+	// what these indicators describe.
 	Sandbox string
 }
 
@@ -110,7 +111,7 @@ func assess(fsys fs.FS, mounts []procfs.Mount, in Inputs) *Report {
 		p.Verdict += "; in a user namespace, so capabilities apply only within it"
 	}
 	if p.Present > 0 && in.Sandbox != "" {
-		p.Verdict += "; inside a " + in.Sandbox + " sandbox, so these describe its emulated kernel, not the host"
+		p.Verdict += "; inside a " + in.Sandbox + " sandbox, so these describe " + container.SandboxKernel(in.Sandbox) + ", not the host"
 	}
 	return r
 }

@@ -86,14 +86,24 @@ func (r *Report) ComputeFindings() {
 			info = append(info, f)
 		}
 	}
+	// Inside a sandbox, kernel-level findings describe the sandbox's own
+	// kernel, which the sandbox separates from the host, so they are
+	// context rather than a hole in isolation from the host.
+	sb := sandbox(r.Runtime)
+	kernel := func(s Severity, summary, detail string) {
+		if sb != "" {
+			s, summary = Info, summary+" inside the "+sb+" sandbox"
+		}
+		add(s, summary, detail)
+	}
 
 	if rt := r.Runtime; rt != nil {
 		if rt.Engine == "" && r.hostNamespace("pid") && r.hostNamespace("mnt") {
 			add(Info, "no container detected; this looks like the host itself", "")
 		}
-		if rt.Sandbox != "" {
-			add(Info, "running in a "+rt.Sandbox+" sandbox",
-				"kernel-level results (namespaces, capabilities, seccomp, privileged indicators) describe the sandbox's own kernel, not the host")
+		if sb != "" {
+			add(Info, "running in a "+sb+" sandbox",
+				"kernel-level results (namespaces, capabilities, seccomp, privileged indicators) describe "+container.SandboxKernel(sb)+", not the host")
 		}
 		if rt.ServiceAccountToken {
 			add(Medium, "Kubernetes service account token is mounted",
@@ -114,13 +124,14 @@ func (r *Report) ComputeFindings() {
 	}
 
 	// Privileged indicators. When most are present, report them as one.
-	collapsed := false
+	collapsed, collapsedCaps := false, false
 	if h := r.Hardening; h != nil {
 		p := h.Privileged
 		var present []string
 		for _, i := range p.Indicators {
 			if i.Present {
 				present = append(present, i.Name)
+				collapsedCaps = collapsedCaps || i.Name == "all capabilities in bounding set"
 			}
 		}
 		if p.Verdict != "" && strings.HasPrefix(p.Verdict, "looks privileged") {
@@ -129,8 +140,7 @@ func (r *Report) ComputeFindings() {
 			if r.UserNamespace {
 				detail += "; in a user namespace, so capabilities apply only within it"
 			}
-			if sb := sandbox(r.Runtime); sb != "" {
-				// The indicators describe the sandbox's emulated kernel.
+			if sb != "" {
 				add(Info, fmt.Sprintf("privileged inside the %s sandbox (%d/%d indicators)", sb, p.Present, len(p.Indicators)), detail)
 			} else {
 				add(High, fmt.Sprintf("looks like a privileged container (%d/%d indicators)", p.Present, len(p.Indicators)), detail)
@@ -140,30 +150,38 @@ func (r *Report) ComputeFindings() {
 				if !i.Present || i.Name == "seccomp disabled" || i.Name == "no LSM confinement" {
 					continue
 				}
-				add(Medium, i.Name, i.Detail)
+				kernel(Medium, i.Name, i.Detail)
 			}
 		}
 		if !collapsed && r.Seccomp != nil && r.Seccomp.Mode == seccomp.ModeDisabled {
-			add(High, "seccomp is disabled", "every syscall is available to the container")
+			kernel(High, "seccomp is disabled", "every syscall is available to the container")
 		}
 		if !collapsed && r.LSM != nil && !r.LSM.Confined() {
-			add(Medium, "no LSM confinement", "neither AppArmor, SELinux nor Smack restricts this process")
+			kernel(Medium, "no LSM confinement", "neither AppArmor, SELinux nor Smack restricts this process")
 		}
 	}
 
 	if r.Runtime == nil || r.Runtime.Engine != "" {
 		for _, ns := range r.Namespaces {
 			if impact, ok := hostNamespaceImpact[ns.Type]; ok && ns.Host {
-				summary := "shares the host " + ns.Type + " namespace"
+				severity, summary, detail := impact.severity, "shares the host "+ns.Type+" namespace", impact.impact
+				if sb != "" {
+					// Kata runs containers in the guest's initial net
+					// namespace; the pod's namespace on the node is the VMM's.
+					severity, summary = Info, "shares the "+sb+" sandbox's initial "+ns.Type+" namespace"
+					detail = "this namespace belongs to " + container.SandboxKernel(sb) + ", not the host"
+				}
 				if !ns.Exact {
 					summary += " (likely)"
 				}
-				add(impact.severity, summary, impact.impact)
+				add(severity, summary, detail)
 			}
 		}
 	}
 
-	if c := r.Capabilities; c != nil && !collapsed {
+	// A collapsed privileged finding hides this only when it already says
+	// that every capability is present.
+	if c := r.Capabilities; c != nil && !(collapsed && collapsedCaps) {
 		var found []string
 		for _, cp := range dangerousCaps {
 			if slices.Contains(c.Bounding.Names, cp) {
@@ -175,7 +193,11 @@ func (r *Report) ComputeFindings() {
 			if r.UserNamespace {
 				detail += "; in a user namespace, so they apply only within it"
 			}
-			add(Medium, "dangerous capabilities: "+strings.Join(found, " "), detail)
+			severity, summary := Medium, "dangerous capabilities"
+			if sb != "" {
+				severity, summary = Info, summary+" inside the "+sb+" sandbox"
+			}
+			add(severity, summary+": "+strings.Join(found, " "), detail)
 		}
 	}
 
@@ -185,7 +207,7 @@ func (r *Report) ComputeFindings() {
 		}
 		for _, call := range []string{"unshare(CLONE_NEWUSER)", "clone(CLONE_NEWUSER)"} {
 			if a, ok := s.ArgumentCheck(call); ok && a.Action == seccomp.ActionAllow {
-				add(Medium, "seccomp allows creating user namespaces",
+				kernel(Medium, "seccomp allows creating user namespaces",
 					call+" is allowed; unprivileged user namespaces expose kernel code normally reserved for root")
 				break
 			}

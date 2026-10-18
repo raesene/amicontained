@@ -58,6 +58,28 @@ func env(m map[string]string) func(string) string {
 	return func(k string) string { return m[k] }
 }
 
+// Captured in Kubernetes pods (containerd 2.2, Kata 4.2, guest 6.18) on
+// the test server's kata-exp cluster: QEMU with the Go and Rust runtimes
+// share files over virtiofs, Firecracker bind-mounts them from a tmpfs.
+const (
+	kataQEMUCmdline   = "tsc=reliable no_timer_check reboot=k root=/dev/pmem0p1 rootflags=dax,data=ordered,errors=remount-ro ro rootfstype=ext4 console=hvc0 quiet panic=1 nr_cpus=4 selinux=0 systemd.unit=kata-containers.target systemd.mask=systemd-networkd.service agent.cdh_api_timeout=50 cgroup_no_v1=all\n"
+	kataQEMUMountinfo = `128 92 0:40 / / rw,relatime master:56 - virtiofs none rw
+129 128 0:41 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw
+135 128 0:34 /5e146859a62b4cb635962ace55e235b1da7bde1a0ca886d91af15b017ac32260-b09a52916164989a-hosts /etc/hosts rw,relatime - virtiofs kataShared rw
+137 128 0:34 /5e146859a62b4cb635962ace55e235b1da7bde1a0ca886d91af15b017ac32260-71c7d3f0179d1145-hostname /etc/hostname rw,relatime - virtiofs kataShared rw
+141 128 0:44 / /var/run/secrets/kubernetes.io/serviceaccount ro,relatime - virtiofs none rw
+`
+	kataRsMountinfo = `128 92 0:40 / / rw,nodev,relatime master:56 - virtiofs none rw
+135 128 0:34 /passthrough/sandbox-71b23673-etc-hosts /etc/hosts rw,nodev,relatime - virtiofs kataShared rw
+`
+	kataFCMountinfo = `130 94 254:32 / / rw,relatime master:56 - ext4 /dev/vdc rw,stripe=128
+131 130 0:40 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw
+137 130 0:25 /kata-containers/shared/containers/77c72cd0af5e13b10327b83735ba069886fdddd1b63a7bfa804f8e1cf7c9a970-283c32ccfe9b8033-hosts /etc/hosts rw,nosuid,nodev - tmpfs tmpfs rw,size=407256k,nr_inodes=819200,mode=755
+`
+	// A runc pod on the same (vmm microVM) node.
+	vmNodeCmdline = "console=ttyS0 reboot=k panic=1 root=/dev/vda rw ip=172.16.0.3::172.16.0.1:255.255.0.0::eth0:off\n"
+)
+
 func TestDetect(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -214,6 +236,46 @@ func TestDetect(t *testing.T) {
 			},
 			engine:  "unknown",
 			sandbox: "gvisor",
+		},
+		{
+			name: "kata qemu in kubernetes",
+			fs: fstest.MapFS{
+				"proc/cmdline":        file(kataQEMUCmdline),
+				"proc/self/mountinfo": file(kataQEMUMountinfo),
+				"proc/self/cgroup":    file("0::/\n"),
+				"var/run/secrets/kubernetes.io/serviceaccount/token": file("x"),
+			},
+			env:          map[string]string{"KUBERNETES_SERVICE_HOST": "10.96.0.1"},
+			engine:       "unknown",
+			orchestrator: "kubernetes",
+			sandbox:      "kata",
+		},
+		{
+			name:    "kata runtime-rs mounts only",
+			fs:      fstest.MapFS{"proc/self/mountinfo": file(kataRsMountinfo)},
+			engine:  "unknown",
+			sandbox: "kata",
+		},
+		{
+			name:    "kata firecracker mounts only",
+			fs:      fstest.MapFS{"proc/self/mountinfo": file(kataFCMountinfo)},
+			engine:  "unknown",
+			sandbox: "kata",
+		},
+		{
+			name:    "kata cmdline only",
+			fs:      fstest.MapFS{"proc/cmdline": file(kataQEMUCmdline)},
+			engine:  "unknown",
+			sandbox: "kata",
+		},
+		{
+			name: "runc on a VM node is not kata",
+			fs: fstest.MapFS{
+				"proc/cmdline":        file(vmNodeCmdline),
+				"proc/self/mountinfo": file(dockerMountinfo),
+			},
+			engine: "docker",
+			id:     dockerID,
 		},
 		{
 			name: "gvisor under docker",

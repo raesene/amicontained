@@ -27,7 +27,7 @@ changed accordingly.
 
 | Area | What is reported |
 |---|---|
-| Runtime | Engine (Docker, Podman, containerd, CRI-O, LXC, systemd-nspawn, OpenVZ, Garden), Kubernetes, gVisor, container ID, pod UID, and the evidence for each |
+| Runtime | Engine (Docker, Podman, containerd, CRI-O, LXC, systemd-nspawn, OpenVZ, Garden), Kubernetes, gVisor, Kata Containers, container ID, pod UID, and the evidence for each |
 | Namespaces | All eight types (cgroup, ipc, mnt, net, pid, time, user, uts): shared with the host or private, plus user-namespace ID mappings |
 | Privileges | All five capability sets, `no_new_privs` |
 | Security modules | Active LSMs, the AppArmor/SELinux/Smack label and whether it actually confines, Landlock availability |
@@ -104,8 +104,13 @@ Each finding is marked by how much it matters:
   that allows creating user namespaces, a shared ipc/uts/cgroup namespace, or
   a mounted Kubernetes service account token.
 - `i` **info**: context you need to read the rest correctly, such as running
-  inside gVisor (whose results describe the sandbox's own kernel) or seccomp
-  results that came from the heuristic method.
+  inside gVisor or Kata Containers, or seccomp results that came from the
+  heuristic method. Inside a sandbox, kernel-level findings (namespaces,
+  capabilities, seccomp, LSMs, privileged indicators) describe gVisor's
+  kernel or the pod VM's guest kernel rather than the host, so they are
+  reported as info and say which sandbox they apply to. Findings that cross
+  the sandbox boundary, such as engine sockets and service account tokens,
+  keep their severity.
 
 "none: this looks like a default, isolated container" means nothing stood
 out. The sections below the findings always hold the full picture.
@@ -299,9 +304,10 @@ checksums.
   i386 (`int 0x80`) or x32 ABIs on amd64 are not detected yet.
 - The kernel can't report whether a process is restricted by Landlock, only
   whether Landlock is available.
-- Kata Containers are not detected as a sandbox.
-- Inside gVisor, kernel-level results describe gVisor's own kernel; the
-  output says so.
+- Inside gVisor and Kata Containers, kernel-level results describe gVisor's
+  kernel or the pod VM's guest kernel; the output says so. What the sandbox
+  itself is allowed to do on the host (runsc's own seccomp filter, the VMM's
+  privileges) can't be seen from inside.
 
 ## License
 
