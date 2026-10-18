@@ -45,7 +45,7 @@ Static binaries for linux/amd64 and linux/arm64 are attached to each
 [release](https://github.com/raesene/amicontained/releases):
 
 ```bash
-VERSION=0.4.9   # release tag without the leading "v"
+VERSION=0.5.0   # release tag without the leading "v"
 ARCH=amd64      # or arm64
 curl -fsSLO "https://github.com/raesene/amicontained/releases/download/v${VERSION}/amicontained_${VERSION}_linux_${ARCH}.tar.gz"
 tar -xzf "amicontained_${VERSION}_linux_${ARCH}.tar.gz" amicontained
@@ -291,7 +291,7 @@ rsvg-convert -z 1.5 shot.svg -o docs/screenshot.png
 **Releases**: set `VERSION.txt`, merge, then tag and push:
 
 ```bash
-git tag -a v0.4.9 -m v0.4.9 && git push origin v0.4.9
+git tag -a v0.5.0 -m v0.5.0 && git push origin v0.5.0
 ```
 
 The release workflow runs the full CI suite on amd64 and arm64, checks the
